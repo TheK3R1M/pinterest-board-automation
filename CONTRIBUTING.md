@@ -25,9 +25,11 @@ Feature requests are welcome! Please:
 
 1. **Fork the repository**
 ```bash
-git clone https://github.com/yourusername/pinterest-board-automation.git
+git clone https://github.com/YOUR_GITHUB_USERNAME/pinterest-board-automation.git
 cd pinterest-board-automation
 ```
+
+*Note: Replace `YOUR_GITHUB_USERNAME` with your actual GitHub username*
 
 2. **Create a feature branch**
 ```bash
