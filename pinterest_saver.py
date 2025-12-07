@@ -180,50 +180,47 @@ class PinterestSaver:
             # Search for board with optimized element limit
             self.logger.log_info(f"🔍 Searching for board: '{target_board_name}'")
 
-            # Only search for visible elements
+            # Try input field search first
+            try:
+                inputs = self.driver.find_elements(By.XPATH, "//input[@type='text']")
+                if inputs:
+                    inp = inputs[0]
+                    inp.click()
+                    time.sleep(0.2)
+                    inp.clear()
+                    inp.send_keys(target_board_name)
+                    time.sleep(0.8)
+            except:
+                pass
+
+            # Search matching boards in visible elements
             all_elements = self.driver.find_elements(By.XPATH, "//*[text()]")
-            
-            for elem in all_elements[:50]:  # DRASTICALLY reduced from 150
+
+            for elem in all_elements[:100]:
                 try:
                     text = elem.text.strip()
-                    
-                    # Exact match or close match
-                    if not text or len(text) < 1 or len(text) > 50:
-                        continue
-                    
-                    if target_board_name.lower() == text.lower() or \
-                       (target_board_name.lower() in text.lower() and len(text) - len(target_board_name) < 5):
-                        
+                    if target_board_name.lower() == text.lower():
                         self.logger.log_info(f"✅ Board match found: '{text}'")
-                        
-                        # Try to click
                         try:
-                            # Scroll into view if needed
-                            if dialog:
-                                self.driver.execute_script("arguments[0].scrollIntoView(true);", elem)
-                            else:
-                                self.driver.execute_script("arguments[0].scrollIntoView(true);", elem)
-                            time.sleep(0.3)  # Reduced from 1s
-                            
+                            self.driver.execute_script("arguments[0].scrollIntoView(true);", elem)
+                            time.sleep(0.3)
                             elem.click()
-                            time.sleep(0.5)  # Reduced from 2s
+                            time.sleep(0.5)
                             self.logger.log_info(f"[OK] Board selected: {target_board_name}")
                             return True
-                        except Exception as click_err:
-                            # Try parent click
+                        except:
                             try:
                                 parent = elem.find_element(By.XPATH, "..")
                                 parent.click()
                                 time.sleep(0.5)
                                 self.logger.log_info(f"[OK] Board selected (via parent): {target_board_name}")
                                 return True
-                            except Exception:
+                            except:
                                 continue
-                        
-                except Exception:
+                except:
                     continue
 
-            self.logger.log_warning(f"Board '{target_board_name}' not found in quick search")
+            self.logger.log_warning(f"Board '{target_board_name}' not found")
             return False
 
         except Exception as e:
