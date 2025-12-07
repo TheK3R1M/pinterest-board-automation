@@ -38,15 +38,12 @@ class PinterestSaver:
     def save_pin_to_board(self, pin_url, target_board_name):
         """Save pin to specified board - OPTIMIZED"""
         try:
-            # Open pin with shorter wait (rendering should be instant)
+            # Open pin with longer wait for page load
             self.logger.log_info(f"Opening pin: {pin_url}")
             self.driver.get(pin_url)
-            time.sleep(1)  # Reduced from 2s
+            time.sleep(2)  # Increased to allow full page load
 
-            # Block / captcha detection -> raise to caller so it can back off
-            self._assert_not_blocked()
-
-            # Check if already saved
+            # Check if already saved FIRST (before block detection)
             if self._is_already_saved():
                 self.logger.log_info("[INFO] Pin already saved, changing board...")
                 if not self._click_saved_button():
@@ -54,6 +51,8 @@ class PinterestSaver:
             else:
                 # Click Save button
                 if not self._click_save_button():
+                    # Check if blocked ONLY after save button fails
+                    self._assert_not_blocked()
                     return False
 
             # Select target board from dialog
@@ -64,12 +63,15 @@ class PinterestSaver:
                 self.logger.log_error(f"❌ Board selection failed: {target_board_name}")
                 return False
 
+        except PinterestBlockError:
+            # Re-raise block errors for retry logic
+            raise
         except Exception as e:
             self.logger.log_error(f"Error saving pin: {pin_url}", e)
             return False
 
     def _assert_not_blocked(self):
-        """Detect only definite blocks; otherwise let flow continue."""
+        """Detect only definite blocks; called only when save button fails."""
         try:
             # Strong signals only
             # 1) Redirected to login (session lost)
@@ -78,30 +80,13 @@ class PinterestSaver:
 
             page_source = self.driver.page_source.lower()
 
-            # 2) Explicit captcha keywords (strict)
-            strict_indicators = ['hcaptcha', 'g-recaptcha', 'showcaptcha']
-            for indicator in strict_indicators:
-                if indicator in page_source:
-                    raise PinterestBlockError("Explicit captcha detected")
+            # 2) Very strict captcha detection - only real captcha elements
+            # hcaptcha and recaptcha have specific DOM structures
+            if '<iframe' in page_source and ('hcaptcha' in page_source or 'recaptcha' in page_source):
+                raise PinterestBlockError("Captcha iframe detected")
 
-            # 3) Fallback: allow if any save/saved button is present (assume not blocked)
-            try:
-                self.driver.find_element(
-                    By.XPATH,
-                    "//button[contains(@aria-label, 'Save') or contains(@aria-label, 'Kaydet') or contains(., 'Save') or contains(., 'Kaydet') or contains(., 'Saved') or contains(., 'Kaydedildi')]"
-                )
-                return
-            except Exception:
-                pass
-
-            # Soft keywords - do NOT raise, just warn
-            soft_indicators = ['captcha', 'verify you', 'suspicious activity', 'too many requests']
-            for indicator in soft_indicators:
-                if indicator in page_source:
-                    self.logger.log_warning("Possible block text detected but proceeding (soft match)")
-                    return
-
-            # If nothing found, proceed
+            # If we get here, likely just a UI issue not a block
+            self.logger.log_warning("⚠️ Save button not found but no clear block detected - may be UI change")
             return
 
         except PinterestBlockError:
@@ -147,19 +132,25 @@ class PinterestSaver:
     def _click_save_button(self):
         """Click Save button - OPTIMIZED"""
         try:
+            # More comprehensive selectors for Save button
             save_selectors = [
                 (By.XPATH, "//button[contains(@aria-label, 'Save') or contains(@aria-label, 'Kaydet')]"),
-                (By.XPATH, "//button[contains(., 'Save') or contains(., 'Kaydet')]"),
+                (By.XPATH, "//button[contains(text(), 'Save') or contains(text(), 'Kaydet')]"),
+                (By.XPATH, "//div[@role='button' and (contains(., 'Save') or contains(., 'Kaydet'))]"),
                 (By.CSS_SELECTOR, "[data-test-id='save-button']"),
+                (By.XPATH, "//button[contains(@class, 'save')]"),
             ]
 
             for by, selector in save_selectors:
                 try:
-                    element = WebDriverWait(self.driver, 5).until(
+                    element = WebDriverWait(self.driver, 8).until(
                         EC.element_to_be_clickable((by, selector))
                     )
+                    # Scroll into view first
+                    self.driver.execute_script("arguments[0].scrollIntoView(true);", element)
+                    time.sleep(0.3)
                     element.click()
-                    time.sleep(0.5)  # Reduced from 1s
+                    time.sleep(1)  # Increased wait for dialog
                     self.logger.log_info("[OK] Save button clicked")
                     return True
                 except (TimeoutException, NoSuchElementException):
@@ -175,17 +166,36 @@ class PinterestSaver:
     def _click_save_button_fallback(self):
         """Alternative method to click save button"""
         try:
+            # Try to find any button with save text
             buttons = self.driver.find_elements(By.TAG_NAME, "button")
-            for button in buttons[:20]:  # Reduced search range
+            self.logger.log_info(f"Fallback: Found {len(buttons)} buttons on page")
+            
+            for idx, button in enumerate(buttons[:30]):  # Increased search range
                 try:
-                    if "save" in button.text.lower() or "kaydet" in button.text.lower():
+                    text = button.text.strip().lower()
+                    aria_label = button.get_attribute("aria-label")
+                    
+                    if text and ("save" in text or "kaydet" in text):
+                        self.logger.log_info(f"Fallback: Trying button #{idx}: '{text}'")
+                        self.driver.execute_script("arguments[0].scrollIntoView(true);", button)
+                        time.sleep(0.2)
                         button.click()
-                        time.sleep(0.5)  # Reduced from 2s
+                        time.sleep(1)
                         self.logger.log_info("[OK] Save button clicked (fallback)")
+                        return True
+                    
+                    if aria_label and ("save" in aria_label.lower() or "kaydet" in aria_label.lower()):
+                        self.logger.log_info(f"Fallback: Trying button #{idx} via aria-label: '{aria_label}'")
+                        self.driver.execute_script("arguments[0].scrollIntoView(true);", button)
+                        time.sleep(0.2)
+                        button.click()
+                        time.sleep(1)
+                        self.logger.log_info("[OK] Save button clicked (fallback via aria-label)")
                         return True
                 except:
                     continue
 
+            self.logger.log_error("Fallback: No save button found among all buttons")
             return False
         except Exception as e:
             self.logger.log_error("Save button fallback error", e)
