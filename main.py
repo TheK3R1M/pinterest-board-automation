@@ -261,6 +261,11 @@ def copy_board(scraper, saver, logger):
     - Duplicate detection
     - Progress bar
     """
+    # Initialize counters at the top to avoid undefined errors
+    successful_count = 0
+    failed_count = 0
+    skipped_count = 0
+    
     try:
         # Create checkpoint file path
         logs_dir = Path("logs")
@@ -305,10 +310,7 @@ def copy_board(scraper, saver, logger):
 
         logger.log_info("-" * 60)
 
-        # Progress tracking
-        successful_count = 0
-        failed_count = 0
-        skipped_count = 0
+        # Progress tracking (counters already initialized at top of function)
         failed_pins_dict = {}
         batch_size = 100
         start_time = time.time()

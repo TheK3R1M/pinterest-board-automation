@@ -35,6 +35,10 @@ class PinterestSaver:
         self.action_chains = ActionChains(driver)
         self.board_cache = {}  # Cache board locations for faster selection
 
+    def _save_lost_pin(self, pin_url):
+        from lost_pins_logger import save_lost_pin
+        save_lost_pin(pin_url)
+
     def save_pin_to_board(self, pin_url, target_board_name):
         """Save pin to specified board - OPTIMIZED"""
         try:
@@ -42,6 +46,24 @@ class PinterestSaver:
             self.logger.log_info(f"Opening pin: {pin_url}")
             self.driver.get(pin_url)
             time.sleep(2)  # Increased to allow full page load
+
+            # LOST PIN/PANO detection
+            lost_keywords = [
+                "üzgünüz", "bulunamadı", "404", "pano yok", "Pin bulunamadı", "sayfa bulunamadı", "Sorry", "not found", "doesn't exist"
+            ]
+            current_url = self.driver.current_url.lower()
+            page_source = self.driver.page_source.lower()
+            is_lost = False
+            # Ana sayfa yönlendirme veya hata mesajı kontrolü
+            if (
+                any(kw in page_source for kw in lost_keywords)
+                or ("pinterest.com/" in current_url and ("/home" in current_url or current_url.rstrip("/") == "https://www.pinterest.com"))
+            ):
+                is_lost = True
+            if is_lost:
+                self.logger.log_error(f"[LOST] Pin silinmiş veya erişilemiyor: {pin_url}")
+                self._save_lost_pin(pin_url)
+                return False
 
             # Check if already saved FIRST (before block detection)
             if self._is_already_saved():
