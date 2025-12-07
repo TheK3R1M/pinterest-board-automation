@@ -36,6 +36,9 @@ class Config:
     
     # Logging settings
     LOG_FAILED_PINS = os.getenv("LOG_FAILED_PINS", "true").lower() == "true"
+
+    # Performance settings (NEW in v2.1)
+    MAX_PARALLEL_WORKERS = int(os.getenv("MAX_PARALLEL_WORKERS", "1"))  # 1 = single, 2+ = parallel boards
     
     # Cookie file path
     COOKIE_FILE = "pinterest_cookies.json"

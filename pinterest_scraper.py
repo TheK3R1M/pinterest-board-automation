@@ -60,9 +60,10 @@ class PinterestScraper:
         while True:  # Infinite scroll until end detected
             # Get all pin links on page
             try:
+                # OPTIMIZATION: Use multiple selectors to catch all pin variations
                 pin_elements = self.driver.find_elements(
                     By.XPATH,
-                    "//a[contains(@href, '/pin/')]"
+                    "//a[contains(@href, '/pin/') or contains(@data-test-id, 'pin') or ancestor::*[@data-test-id and contains(@data-test-id, 'Pin')]]"
                 )
                 
                 for element in pin_elements:

@@ -52,8 +52,8 @@ def main():
     )
     parser.add_argument(
         "mode",
-        choices=["login", "copy", "profile", "retry"],
-        help="Operation mode: login (initial login), copy (cookie-based), profile (profile-based), retry (retry failed pins)"
+        choices=["login", "copy", "profile", "retry", "multi"],
+        help="Operation mode: login, copy, profile, retry, multi (parallel boards)"
     )
 
     args = parser.parse_args()
@@ -73,6 +73,11 @@ def main():
             
         elif args.mode == "retry":
             run_retry_failed(driver_manager, logger)
+            
+        elif args.mode == "multi":
+            logger.log_warning("⚠️  EXPERIMENTAL: Multi-board mode (parallel copying)")
+            logger.log_info("This feature requires 2+ board URLs in .env")
+            run_multi_board(driver_manager, logger)
 
     except KeyboardInterrupt:
         logger.log_warning("Stopped by user (Ctrl+C)")
@@ -148,8 +153,6 @@ def run_retry_failed(driver_manager, logger):
     """Retry mode: Retry only failed pins from last run"""
     logger.log_info("MODE: Retry Failed Pins")
     logger.log_info("-" * 60)
-
-    driver = driver_manager.create_driver(use_profile=False)
     auth = PinterestAuth(driver, logger)
     saver = PinterestSaver(driver, logger)
 
@@ -368,6 +371,28 @@ def _save_checkpoint(progress_file, processed_pins, logger):
             json.dump(checkpoint, f, indent=2, ensure_ascii=False)
     except Exception as e:
         logger.log_warning(f"Could not save checkpoint: {e}")
+
+def run_multi_board(driver_manager, logger):
+    """
+    EXPERIMENTAL: Multi-board parallel copying
+    Copies from multiple source boards to multiple target boards in parallel
+    
+    For best performance:
+    - Create multiple rows in .env separated by commas:
+      SOURCE_BOARD_URL_1=https://...
+      TARGET_BOARD_NAME_1=Board1
+      SOURCE_BOARD_URL_2=https://...
+      TARGET_BOARD_NAME_2=Board2
+    """
+    logger.log_info("MODE: Multi-Board Parallel Copy (EXPERIMENTAL)")
+    logger.log_info("-" * 60)
+    
+    # Parse multi-board config (future enhancement)
+    logger.log_info("❌ Multi-board mode not yet implemented")
+    logger.log_info("💡 For now, run 'python main.py copy' multiple times with different .env settings")
+    logger.log_warning("Future version will support parallel board copying with 2+ Chrome instances")
+    
+    return
 
 if __name__ == "__main__":
     main()
