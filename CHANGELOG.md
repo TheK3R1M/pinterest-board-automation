@@ -1,6 +1,157 @@
 # Changelog
 
-## v2.1 - Performance Optimization Release (December 7, 2025)
+## v2.2 - Inventory & Duplicate Detection System (December 7, 2025)
+
+### 🔍 NEW: Inventory System to Prevent Duplicates
+
+#### Problem Solved
+- ✅ **Resume from any point**: 2000 pins scanned, 500 saved, user restarts → detects exactly where to resume
+- ✅ **Duplicate Prevention**: Detects pins saved multiple times automatically
+- ✅ **No Data Loss**: Interrupted runs don't cause duplicate saves
+
+#### New Files
+- `pins_inventory.json` - Complete board scan (created once at start)
+- `success_pins_latest.json` - Latest successful saves (for comparison)
+- `duplicates.json` - Detailed report of duplicate-saved pins
+- `progress_checkpoint.json` - Real-time resume point marker
+
+#### How It Works
+1. **First run**: Scans all pins → creates `pins_inventory.json`
+2. **Restart**: Compares inventory with success history
+3. **Result**: Shows exact resume point + duplicate warnings
+4. **No re-processing**: Already-saved pins never saved again
+
+#### New Module
+- `pinterest_inventory.py` - Inventory management system
+
+### 🚀 Workflow with Inventory System
+
+**Scenario 1: Interrupted Run**
+```
+Start: 2000 pins
+After 500 saves: User hits Ctrl+C
+Restart: System detects "500 saved, resume from #501"
+Result: 1500 pins to go, no duplicates
+```
+
+**Scenario 2: PC Crash**
+```
+Start: 1000 pins
+After 300 saves: PC crashes
+Next day: Restart
+System: Detects checkpoint, resumes from #301
+Result: 700 pins remaining, zero duplicates
+```
+
+**Scenario 3: Duplicate Detection**
+```
+Previous run: 100 pins saved
+New run with same board: Inventory detects all 100 already done
+If 5 saved twice: `duplicates.json` reports them
+User can clean up manually or auto-delete (v2.3)
+```
+
+### 📊 New Log Files
+
+After each run, you'll get:
+```
+logs/
+├── pins_inventory.json          # Board inventory (created once)
+├── success_pins_TIMESTAMP.json  # This run's successes
+├── success_pins_latest.json     # Latest successes (for comparison)
+├── failed_pins_TIMESTAMP.json   # Failed pins
+├── duplicates.json              # Duplicate report (if found)
+├── progress_checkpoint.json     # Current resume point
+└── error_log_TIMESTAMP.txt      # Errors
+```
+
+### 🔧 Technical Changes
+
+#### `pinterest_inventory.py` (NEW)
+- `create_inventory()` - Scans and records all pins
+- `detect_duplicates()` - Finds resume point and duplicates
+- `_save_duplicates_report()` - Creates detailed report
+- `verify_inventory_integrity()` - Ensures board hasn't changed
+
+#### `main.py`
+- Added 3-step process: Scan → Inventory → Resume
+- Integrated inventory checks before starting copy
+- Smart resume from exact pin position
+
+#### `logger.py`
+- Now saves `success_pins_latest.json` automatically
+- Better timestamp handling
+- Inventory-compatible logging
+
+### 📋 New Commands Coming
+
+**Upcoming (v2.3):**
+```powershell
+python main.py clean-duplicates  # Auto-remove duplicates from Pinterest
+python main.py verify-inventory   # Check board integrity
+python main.py status             # Show progress without running
+```
+
+### 🛡️ Safety Features
+
+- **No data loss** on restart
+- **Automatic duplicate detection**
+- **Detailed logging** of every decision
+- **Checkpoint recovery** even after crashes
+- **User notification** if duplicates found
+
+### ⚠️ Important for Users
+
+If you see `duplicates.json`:
+1. **Don't panic** - duplicates were found but NOT created by v2.2
+2. These are likely from earlier runs
+3. Manual cleanup recommended before next run
+4. v2.3 will have auto-cleanup option
+
+### 🎯 Example User Journey
+
+```
+User: I have 2000 pins to save
+1. python main.py copy
+   → Scans 2000 pins, creates inventory
+   → Saves pins with progress bar
+
+User: PC crashed after 500 pins
+2. python main.py copy  (restart)
+   → Reads inventory
+   → Detects "500 already saved"
+   → Resumes from pin #501
+   → Saves remaining 1500
+   → No duplicates! ✅
+
+User: Board situation?
+3. python main.py status  (v2.3 feature)
+   → Shows: "2000 pins total, 2000 saved, 0 duplicates"
+   → Board complete! ✅
+```
+
+### 📊 Comparison: Before vs After v2.2
+
+| Scenario | v2.1 | v2.2 |
+|----------|------|------|
+| Resume after 500/2000 | Re-saves all 2000 (500 duplicate) ❌ | Resumes from #501 ✅ |
+| PC crash mid-copy | Manual cleanup needed ❌ | Auto-detects resume point ✅ |
+| Duplicate detection | No tracking ❌ | Full report with details ✅ |
+| Inventory tracking | None ❌ | Complete history ✅ |
+
+## Previous Releases
+
+### v2.1 - Performance Optimization
+- 70% speed improvement
+- Fixed dialog scroll bug
+- Optimized board selection
+
+### v2.0 - Major Feature Update
+- Smart auto-scroll
+- Progress bar (tqdm)
+- Retry failed pins
+- Checkpoint system
+
 
 ### 🚀 Major Performance Improvements (70% Faster!)
 

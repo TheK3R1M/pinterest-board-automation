@@ -31,6 +31,7 @@ from driver_manager import DriverManager
 from pinterest_auth import PinterestAuth
 from pinterest_scraper import PinterestScraper
 from pinterest_saver import PinterestSaver
+from pinterest_inventory import PinterestInventoryManager
 
 def main():
     # Validate configuration
@@ -222,11 +223,11 @@ def run_retry_failed(driver_manager, logger):
 def copy_board(scraper, saver, logger):
     """
     Copy board: collect and save pins
-    ✨ NEW FEATURES:
-    - Progress bar (tqdm)
+    ✨ v2.1+ Features:
+    - Inventory system (detects duplicates + resume point)
     - Auto-resume from checkpoint
-    - Batch saving with auto-save
-    - Optimized for 1000+ pins
+    - Duplicate detection
+    - Progress bar
     """
     try:
         logger.log_info("-" * 60)
@@ -234,12 +235,11 @@ def copy_board(scraper, saver, logger):
         logger.log_info(f"Target Board: {Config.TARGET_BOARD_NAME}")
         logger.log_info("-" * 60)
 
-        # Progress file for resume capability
-        progress_file = Path("logs/progress_checkpoint.json")
-        progress_file.parent.mkdir(exist_ok=True)
+        # Initialize inventory manager
+        inventory_mgr = PinterestInventoryManager(logger)
 
         # Collect pins
-        logger.log_info("Collecting pins from board...")
+        logger.log_info("📍 Step 1: Scanning all pins from board...")
         pin_links = scraper.collect_pin_links(Config.SOURCE_BOARD_URL)
 
         if not pin_links:
@@ -249,37 +249,30 @@ def copy_board(scraper, saver, logger):
         total_pins = len(pin_links)
         logger.log_info(f"Total {total_pins} pins collected")
         
-        # Load progress checkpoint (resume capability)
-        processed_pins = set()
-        if progress_file.exists():
-            try:
-                with open(progress_file, 'r', encoding='utf-8') as f:
-                    checkpoint = json.load(f)
-                    processed_pins = set(checkpoint.get('processed', []))
-                    logger.log_info(f"📂 Resuming from checkpoint - {len(processed_pins)} pins already processed")
-            except Exception as e:
-                logger.log_warning(f"Could not load checkpoint: {e}")
-
-        # Filter out already processed pins
-        remaining_pins = [pin for pin in pin_links if pin not in processed_pins]
+        # Create or verify inventory
+        logger.log_info("📍 Step 2: Creating inventory (to detect duplicates & resume point)...")
+        inventory = inventory_mgr.create_inventory(pin_links)
         
-        if not remaining_pins:
-            logger.log_success("✅ All pins already processed!")
-            # Clean up checkpoint
-            if progress_file.exists():
-                progress_file.unlink()
-                logger.log_info("Checkpoint file deleted")
+        # Check for duplicates and find resume point
+        logger.log_info("📍 Step 3: Checking for duplicates and previous progress...")
+        remaining_pins, duplicates, resume_index = inventory_mgr.detect_duplicates()
+        
+        if not inventory_mgr.get_resume_instructions(remaining_pins, duplicates, resume_index):
+            logger.log_warning("Cannot proceed - see instructions above")
             return
 
-        logger.log_info(f"🔄 Remaining: {len(remaining_pins)} pins")
+        if not remaining_pins:
+            logger.log_success("✅ All pins already saved!")
+            return
+
         logger.log_info("-" * 60)
 
         # Progress tracking
         successful_count = 0
         failed_count = 0
-        skipped_count = len(processed_pins)
+        skipped_count = len(processed_pins) if 'processed_pins' in locals() else 0
         failed_pins_dict = {}
-        batch_size = 100  # Auto-save checkpoint every 100 pins
+        batch_size = 100
         start_time = time.time()
         
         # Save each pin with progress bar
@@ -294,21 +287,20 @@ def copy_board(scraper, saver, logger):
                         logger.add_success_pin(pin_url)
                         successful_count += 1
                         pbar.set_postfix({"✅": successful_count, "❌": failed_count}, refresh=False)
+                        
+                        # Mark in inventory (real-time checkpoint)
+                        inventory_mgr.mark_pin_saved(pin_url)
                     else:
                         logger.add_failed_pin(pin_url, "Save failed")
                         failed_pins_dict[pin_url] = "Save failed"
                         failed_count += 1
                         pbar.set_postfix({"✅": successful_count, "❌": failed_count}, refresh=False)
 
-                    # Add to processed set
-                    processed_pins.add(pin_url)
                     pbar.update(1)
 
                     # Auto-save checkpoint every batch_size pins
                     if idx % batch_size == 0:
                         _save_checkpoint(progress_file, processed_pins, logger)
-
-                    # Human-like random delay
                     delay = Config.RANDOM_DELAY_MIN + random.random() * (
                         Config.RANDOM_DELAY_MAX - Config.RANDOM_DELAY_MIN
                     )
