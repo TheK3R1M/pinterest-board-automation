@@ -231,6 +231,8 @@ def copy_board(scraper, saver, logger):
     - Progress bar
     """
     try:
+        progress_file = None  # Will be set if using checkpoint
+
         logger.log_info("-" * 60)
         logger.log_info(f"Source Board: {Config.SOURCE_BOARD_URL}")
         logger.log_info(f"Target Board: {Config.TARGET_BOARD_NAME}")

@@ -144,85 +144,96 @@ class PinterestSaver:
 
     def _select_board_optimized(self, target_board_name):
         """
-        HEAVILY OPTIMIZED board selection
-        - Waits only 1s instead of 3s
-        - Single pass element search (not double search)
-        - Fixed scroll to target dialog, not page
+        Simple board selection - finds board in dialog list and clicks it
+        Pinterest shows boards as clickable items in a scrollable list
         """
         try:
-            # Wait for dialog - reduced from 3s to 1s
-            time.sleep(1)
-
-            # Get dialog reference (FIX: scroll dialog, not page)
+            time.sleep(0.5)
+            
+            # Wait for dialog to be present
             dialog = None
             try:
-                dialog = WebDriverWait(self.driver, 3).until(
+                dialog = WebDriverWait(self.driver, 2).until(
                     EC.presence_of_element_located((By.XPATH, "//div[@role='dialog']"))
                 )
                 self.logger.log_info("Dialog opened")
-            except TimeoutException:
-                self.logger.log_warning("Dialog not found, continuing...")
-
-            # Scroll dialog to load more boards (FIX: now scrolls dialog, not page)
+            except:
+                self.logger.log_warning("Dialog not found")
+            
+            # Scroll dialog to load all boards
             if dialog:
                 try:
-                    for _ in range(2):  # Reduced from 3
-                        self.driver.execute_script("arguments[0].scrollTop += 500", dialog)
-                        time.sleep(0.3)  # Reduced from 1s
-                    self.logger.log_info("Dialog scrolled (correct element)")
-                except Exception as e:
-                    self.logger.log_warning(f"Dialog scroll failed: {e}")
-
-            # Try to click "See all boards" - BUT ONLY ONCE
-            board_found = self._try_see_all_boards()
-
-            # SINGLE search pass (FIXES redundant search)
-            # Search for board with optimized element limit
+                    for _ in range(3):
+                        self.driver.execute_script("arguments[0].scrollTop += 300", dialog)
+                        time.sleep(0.3)
+                except:
+                    pass
+            
             self.logger.log_info(f"🔍 Searching for board: '{target_board_name}'")
-
-            # Try input field search first
-            try:
-                inputs = self.driver.find_elements(By.XPATH, "//input[@type='text']")
-                if inputs:
-                    inp = inputs[0]
-                    inp.click()
-                    time.sleep(0.2)
-                    inp.clear()
-                    inp.send_keys(target_board_name)
-                    time.sleep(0.8)
-            except:
-                pass
-
-            # Search matching boards in visible elements
+            time.sleep(0.3)
+            
+            # Get all text elements in dialog/page
             all_elements = self.driver.find_elements(By.XPATH, "//*[text()]")
-
-            for elem in all_elements[:100]:
+            
+            found_matches = []
+            for elem in all_elements:
                 try:
                     text = elem.text.strip()
+                    
+                    # Skip if empty or too long
+                    if not text or len(text) < 1 or len(text) > 100:
+                        continue
+                    
+                    # Exact case-insensitive match
                     if target_board_name.lower() == text.lower():
-                        self.logger.log_info(f"✅ Board match found: '{text}'")
-                        try:
-                            self.driver.execute_script("arguments[0].scrollIntoView(true);", elem)
-                            time.sleep(0.3)
-                            elem.click()
-                            time.sleep(0.5)
-                            self.logger.log_info(f"[OK] Board selected: {target_board_name}")
-                            return True
-                        except:
-                            try:
-                                parent = elem.find_element(By.XPATH, "..")
-                                parent.click()
-                                time.sleep(0.5)
-                                self.logger.log_info(f"[OK] Board selected (via parent): {target_board_name}")
-                                return True
-                            except:
-                                continue
+                        found_matches.append((elem, text))
+                        self.logger.log_info(f"✅ Found board: '{text}'")
+                
                 except:
                     continue
-
-            self.logger.log_warning(f"Board '{target_board_name}' not found")
+            
+            # Try to click each match
+            for elem, text in found_matches:
+                try:
+                    # Make sure element is visible
+                    self.driver.execute_script("arguments[0].scrollIntoView(true);", elem)
+                    time.sleep(0.2)
+                    
+                    # Try direct click
+                    try:
+                        elem.click()
+                        time.sleep(0.8)
+                        self.logger.log_info(f"[OK] Board selected: {target_board_name}")
+                        return True
+                    except:
+                        # Try JavaScript click
+                        self.driver.execute_script("arguments[0].click();", elem)
+                        time.sleep(0.8)
+                        self.logger.log_info(f"[OK] Board selected (JS click): {target_board_name}")
+                        return True
+                
+                except Exception as click_err:
+                    self.logger.log_warning(f"Could not click board: {click_err}")
+                    continue
+            
+            # If no exact matches, log what we found
+            if not found_matches:
+                self.logger.log_warning(f"Board '{target_board_name}' not found in dialog")
+                # Debug: show first 10 text elements
+                sample_texts = []
+                for elem in all_elements[:10]:
+                    try:
+                        sample_texts.append(elem.text.strip())
+                    except:
+                        pass
+                if sample_texts:
+                    self.logger.log_info(f"Sample available items: {sample_texts}")
+            
             return False
-
+        
+        except Exception as e:
+            self.logger.log_error("Board selection error", e)
+            return False
         except Exception as e:
             self.logger.log_error("Board selection error", e)
             return False
