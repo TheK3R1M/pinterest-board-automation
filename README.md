@@ -256,6 +256,61 @@ pinterest-board-automation/
 
 **Note:** Set `SCROLL_PAUSE_TIME=0.5` in `.env` for even faster performance if your internet is stable!
 
+## 🐛 Troubleshooting
+
+### Problem: Stops at 100 pins
+
+**Possible causes:**
+1. **Pinterest rate limiting** - Pinterest may block after too many saves
+   - **Solution:** Wait 5-10 minutes, then run retry mode: `python main.py retry`
+   - Use higher `RANDOM_DELAY_MIN` and `RANDOM_DELAY_MAX` (e.g., 3-7 seconds)
+
+2. **Captcha/Bot detection**
+   - **Solution:** Run with `HEADLESS_MODE=false` to manually solve captcha
+   - Clear browser cache: delete `pinterest_cookies.json` and login again
+
+3. **Session timeout**
+   - **Solution:** Login again: `python main.py login`
+
+### Problem: Finds fewer pins than expected (e.g., 1600 instead of 2202)
+
+**Causes:**
+- Pinterest's lazy loading not completing
+- Scroll timeout too aggressive
+
+**Solutions:**
+1. **Test scraping first:**
+   ```bash
+   python test_scraper.py
+   ```
+   This shows how many pins are actually collected
+
+2. **Adjust scroll settings in `.env`:**
+   ```env
+   SCROLL_PAUSE_TIME=1.5  # Increase from 0.8 to 1.5
+   ```
+
+3. **Run in non-headless mode** to watch the scroll:
+   ```env
+   HEADLESS_MODE=false
+   ```
+
+4. **Check the logs** in `logs/` folder for scroll statistics
+
+### Problem: Board not found
+
+**Solutions:**
+- Make sure `TARGET_BOARD_NAME` matches **exactly** (case-sensitive)
+- Try shortening the board name if it's too long
+- Create the target board manually first on Pinterest
+
+### Problem: Chrome driver issues
+
+**Solutions:**
+```bash
+pip install --upgrade selenium webdriver-manager
+```
+
 ## 🐛 Issues & Support
 
 When reporting issues, include:
@@ -263,6 +318,7 @@ When reporting issues, include:
 - Operating system
 - Error message and logs
 - Last successful step
+- Output from `python test_scraper.py`
 
 ## 🤝 Contributing
 

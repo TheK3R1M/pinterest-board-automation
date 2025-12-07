@@ -176,8 +176,12 @@ def run_retry_failed(driver_manager, logger):
     
     with open(latest_failed_file, 'r', encoding='utf-8') as f:
         failed_data = json.load(f)
-    
-    failed_pins = failed_data.get('failed_pins', [])
+
+    # Handle both formats: list or dict with 'failed_pins' key
+    if isinstance(failed_data, list):
+        failed_pins = failed_data
+    else:
+        failed_pins = failed_data.get('failed_pins', [])
     
     if not failed_pins:
         logger.log_info("No failed pins to retry!")
@@ -192,7 +196,17 @@ def run_retry_failed(driver_manager, logger):
     
     with tqdm(total=len(failed_pins), desc="🔄 Retrying pins", unit="pin") as pbar:
         for pin_data in failed_pins:
-            pin_url = pin_data.get('pin_url', '')
+            # Handle both string URLs and dict format
+            if isinstance(pin_data, str):
+                pin_url = pin_data
+            else:
+                pin_url = pin_data.get('pin_url', pin_data.get('url', ''))
+            
+            # Skip if no valid URL
+            if not pin_url:
+                logger.log_warning(f"Skipping invalid pin data: {pin_data}")
+                pbar.update(1)
+                continue
             
             try:
                 if saver.save_pin_to_board(pin_url, Config.TARGET_BOARD_NAME):
@@ -231,7 +245,11 @@ def copy_board(scraper, saver, logger):
     - Progress bar
     """
     try:
-        progress_file = None  # Will be set if using checkpoint
+        # Create checkpoint file path
+        logs_dir = Path("logs")
+        logs_dir.mkdir(exist_ok=True)
+        progress_file = logs_dir / "progress_checkpoint.json"
+        processed_pins = set()  # Track which pins have been processed
 
         logger.log_info("-" * 60)
         logger.log_info(f"Source Board: {Config.SOURCE_BOARD_URL}")
@@ -273,7 +291,7 @@ def copy_board(scraper, saver, logger):
         # Progress tracking
         successful_count = 0
         failed_count = 0
-        skipped_count = len(processed_pins) if 'processed_pins' in locals() else 0
+        skipped_count = 0
         failed_pins_dict = {}
         batch_size = 100
         start_time = time.time()
@@ -289,6 +307,7 @@ def copy_board(scraper, saver, logger):
                     if saver.save_pin_to_board(pin_url, Config.TARGET_BOARD_NAME):
                         logger.add_success_pin(pin_url)
                         successful_count += 1
+                        processed_pins.add(pin_url)  # Track processed
                         pbar.set_postfix({"✅": successful_count, "❌": failed_count}, refresh=False)
                         
                         # Mark in inventory (real-time checkpoint)
@@ -297,12 +316,13 @@ def copy_board(scraper, saver, logger):
                         logger.add_failed_pin(pin_url, "Save failed")
                         failed_pins_dict[pin_url] = "Save failed"
                         failed_count += 1
+                        processed_pins.add(pin_url)  # Track as processed even if failed
                         pbar.set_postfix({"✅": successful_count, "❌": failed_count}, refresh=False)
 
                     pbar.update(1)
 
-                    # Auto-save checkpoint every batch_size pins
-                    if idx % batch_size == 0:
+                    # Auto-save checkpoint every batch_size pins (only if progress_file exists)
+                    if idx % batch_size == 0 and progress_file:
                         _save_checkpoint(progress_file, processed_pins, logger)
                     delay = Config.RANDOM_DELAY_MIN + random.random() * (
                         Config.RANDOM_DELAY_MAX - Config.RANDOM_DELAY_MIN
@@ -312,7 +332,8 @@ def copy_board(scraper, saver, logger):
                 except KeyboardInterrupt:
                     print()  # New line after progress bar
                     logger.log_warning("⚠️  Stopped by user!")
-                    _save_checkpoint(progress_file, processed_pins, logger)
+                    if progress_file:
+                        _save_checkpoint(progress_file, processed_pins, logger)
                     logger.log_info(f"Progress saved: {idx}/{len(remaining_pins)} pins processed")
                     logger.log_info("💡 Run 'python main.py copy' again to resume from this point")
                     raise
@@ -322,12 +343,11 @@ def copy_board(scraper, saver, logger):
                     logger.add_failed_pin(pin_url, str(e))
                     failed_pins_dict[pin_url] = str(e)
                     failed_count += 1
-                    processed_pins.add(pin_url)  # Mark as processed even if failed
                     pbar.update(1)
 
         # Clean up checkpoint on successful completion
         print()  # New line after progress bar
-        if progress_file.exists():
+        if progress_file and progress_file.exists():
             progress_file.unlink()
             logger.log_info("Checkpoint file deleted (all pins processed)")
 

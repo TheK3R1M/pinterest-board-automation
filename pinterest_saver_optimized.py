@@ -38,6 +38,12 @@ class PinterestSaver:
             self.driver.get(pin_url)
             time.sleep(1)  # Reduced from 2s
 
+            # YENI: Pinterest session/captcha kontrolü
+            if self._check_for_blocks():
+                self.logger.log_error("⚠️ Pinterest bloğu tespit edildi (captcha/rate limit)")
+                self.logger.log_warning("💡 5 dakika bekleyin ve tekrar deneyin")
+                return False
+
             # Check if already saved
             if self._is_already_saved():
                 self.logger.log_info("[INFO] Pin already saved, changing board...")
@@ -58,6 +64,36 @@ class PinterestSaver:
 
         except Exception as e:
             self.logger.log_error(f"Error saving pin: {pin_url}", e)
+            return False
+
+    def _check_for_blocks(self):
+        """Pinterest captcha veya rate limit kontrolü"""
+        try:
+            page_source = self.driver.page_source.lower()
+            
+            # Captcha, rate limit veya block göstergeleri
+            block_indicators = [
+                'captcha',
+                'suspicious activity',
+                'robot',
+                'verify you',
+                'şüpheli aktivite',
+                'doğrula',
+                'rate limit',
+                'too many requests',
+                'çok fazla istek'
+            ]
+            
+            for indicator in block_indicators:
+                if indicator in page_source:
+                    return True
+            
+            # Giriş sayfasına yönlendirilmiş mi?
+            if 'login' in self.driver.current_url.lower() and '/pin/' not in self.driver.current_url:
+                return True
+                
+            return False
+        except:
             return False
 
     def _is_already_saved(self):
