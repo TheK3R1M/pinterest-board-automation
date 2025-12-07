@@ -38,21 +38,26 @@ class PinterestScraper:
     
     def _scroll_to_load_all(self):
         """
-        Scroll page to load all pins
-        Uses improved algorithm for large boards (hundreds of pins)
+        Scroll page to load all pins with smart auto-detection
+        Automatically detects end of board (supports 1000+ pins)
+        No manual scroll limit - stops when no new pins load
         """
         pin_urls = set()
         scroll_pause_time = Config.SCROLL_PAUSE_TIME
-        max_scrolls = Config.MAX_SCROLLS
-        no_change_threshold = 5  # Increased from 3 to 5 for better detection
+        no_change_threshold = 8  # Increased to 8 for better reliability on large boards
         
-        self.logger.log_info(f"Maximum {max_scrolls} scrolls will be performed...")
-        
+        # Adaptive scroll pause for large boards
+        min_scroll_pause = 0.5
+        max_scroll_pause = 2.0
+
+        self.logger.log_info("Auto-scroll enabled - will detect board end automatically...")
+
         no_change_count = 0
         scroll_count = 0
         last_pin_count = 0
-        
-        while scroll_count < max_scrolls:
+        consecutive_errors = 0
+
+        while True:  # Infinite scroll until end detected
             # Get all pin links on page
             try:
                 pin_elements = self.driver.find_elements(
@@ -79,27 +84,40 @@ class PinterestScraper:
                 else:
                     no_change_count = 0
                 
-                # Report progress every 5 scrolls
-                if scroll_count % 5 == 0:
+                # Report progress every 10 scrolls
+                if scroll_count % 10 == 0:
                     self.logger.log_info(f"Scroll {scroll_count}: {current_pin_count} pins loaded")
-                
+
                 # If no new pins after threshold, we've reached the end
                 if no_change_count >= no_change_threshold:
-                    self.logger.log_info(f"Scroll stopped - total {current_pin_count} pins loaded")
+                    self.logger.log_success(f"Board end detected - total {current_pin_count} pins loaded")
                     break
-                
+
                 last_pin_count = current_pin_count
-                
+
+                # Adaptive scroll pause (faster for large boards)
+                if current_pin_count > 500:
+                    adaptive_pause = min_scroll_pause
+                elif current_pin_count > 200:
+                    adaptive_pause = (min_scroll_pause + scroll_pause_time) / 2
+                else:
+                    adaptive_pause = scroll_pause_time
+
                 # Scroll down
                 self.driver.execute_script(
                     "window.scrollTo(0, document.body.scrollHeight);"
                 )
-                time.sleep(scroll_pause_time)
+                time.sleep(adaptive_pause)
                 scroll_count += 1
-                
+                consecutive_errors = 0  # Reset on success
+
             except Exception as e:
-                self.logger.log_warning(f"Scroll error: {e}")
-                break
+                consecutive_errors += 1
+                self.logger.log_warning(f"Scroll error ({consecutive_errors}/3): {e}")
+                if consecutive_errors >= 3:
+                    self.logger.log_error("Too many scroll errors, stopping...")
+                    break
+                time.sleep(2)  # Wait before retry
         
         self.logger.log_info(
             f"Scroll completed: {scroll_count} iterations | Total pins: {len(pin_urls)}"

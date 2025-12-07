@@ -28,7 +28,7 @@ class Config:
     # Selenium settings
     HEADLESS_MODE = os.getenv("HEADLESS_MODE", "false").lower() == "true"
     SCROLL_PAUSE_TIME = float(os.getenv("SCROLL_PAUSE_TIME", "0.8"))
-    MAX_SCROLLS = int(os.getenv("MAX_SCROLLS", "200"))
+    # MAX_SCROLLS removed - now uses smart auto-scroll detection
     
     # Random delay settings (seconds)
     RANDOM_DELAY_MIN = float(os.getenv("RANDOM_DELAY_MIN", "2"))
@@ -51,9 +51,6 @@ class Config:
         
         if cls.SCROLL_PAUSE_TIME <= 0:
             raise ValueError("SCROLL_PAUSE_TIME must be positive")
-        
-        if cls.MAX_SCROLLS <= 0:
-            raise ValueError("MAX_SCROLLS must be positive")
-        
+
         if cls.RANDOM_DELAY_MIN < 0 or cls.RANDOM_DELAY_MAX < cls.RANDOM_DELAY_MIN:
             raise ValueError("Invalid RANDOM_DELAY settings")

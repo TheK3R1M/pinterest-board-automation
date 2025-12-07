@@ -3,20 +3,25 @@
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![Selenium 4.x](https://img.shields.io/badge/selenium-4.x-green.svg)](https://www.selenium.dev/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+![1000+ Pins Supported](https://img.shields.io/badge/pins-1000+-brightgreen.svg)
+![Auto Resume](https://img.shields.io/badge/resume-auto-orange.svg)
 
-Automated Pinterest board-to-board pin copying tool using Python and Selenium. Copy hundreds of pins efficiently with smart board selection, rate limiting, and comprehensive logging.
+Automated Pinterest board-to-board pin copying tool using Python and Selenium. Copy **1000+ pins** efficiently with **auto-resume**, **progress bar**, **smart scrolling**, and **retry logic**.
 
 ## ✨ Features
 
 - 🔐 **Cookie-based Authentication** - No API key required, just login once
 - 🎯 **Smart Board Selector** - Auto-finds and selects target board with scroll support
-- 📊 **Progress Tracking** - Real-time batch reports every 50 pins
-- 🔄 **Optimized Scrolling** - Efficiently loads all pins from large boards
+- 📊 **Visual Progress Bar** - Real-time tqdm progress bar with ETA
+- 🔄 **Smart Auto-Scroll** - Automatically detects board end (no manual limit!)
+- 💾 **Auto-Resume Capability** - Interrupted? Resume from checkpoint
+- 🔁 **Retry Failed Pins** - One-command retry for failed pins
 - 🤖 **Anti-Bot Protection** - Random delays and human-like behavior
 - 📝 **Detailed Logging** - Success/failed pins saved to JSON
-- ⚡ **Handles Hundreds of Pins** - Tested and optimized for 100+ pins
+- ⚡ **Handles 1000+ Pins** - Tested and optimized for large boards
+- 🚫 **Duplicate Detection** - Skips already processed pins
 - 🌐 **Cross-Platform** - Windows, Linux, macOS support
-- 🎮 **Multiple Modes** - Cookie-based, Chrome profile-based, or headless
+- 🔀 **Multiple Modes** - Cookie-based, Chrome profile-based, or headless
 
 ## 🚀 Quick Start
 
@@ -105,10 +110,12 @@ python3 main.py copy
 ```
 
 - Loads saved cookies from previous login
+- **Smart auto-scroll** - automatically detects board end
 - Collects all pins from source board
-- Saves each pin to target board
+- Saves each pin with **visual progress bar**
+- **Auto-saves checkpoint** every 100 pins
 - Logs results to JSON files in `logs/` directory
-- Shows progress every 50 pins
+- Press Ctrl+C to pause - run again to **resume from checkpoint**
 
 #### Alternative: Use Chrome Profile
 
@@ -124,11 +131,30 @@ python3 main.py profile
 
 Uses existing Chrome profile (first set `CHROME_PROFILE_PATH` in `.env`)
 
+#### Step 3: Retry Failed Pins (Optional)
+
+If some pins failed, retry them with one command:
+
+**Windows (PowerShell):**
+```powershell
+python main.py retry
+```
+
+**Linux/macOS:**
+```bash
+python3 main.py retry
+```
+
+- Automatically loads failed pins from last run
+- Retries with visual progress bar
+- Perfect for network issues or temporary errors
+
 #### Check Your Results
 
 After copying, check the `logs/` folder for:
 - `success_pins_TIMESTAMP.json` - Successfully saved pins
 - `failed_pins_TIMESTAMP.json` - Pins that failed (with reasons)
+- `progress_checkpoint.json` - Resume checkpoint (auto-deleted when complete)
 
 ## 📋 Configuration
 
@@ -140,11 +166,12 @@ After copying, check the `logs/` folder for:
 | `TARGET_BOARD_NAME` | - | Name of destination board |
 | `CHROME_PROFILE_PATH` | - | Chrome profile directory (optional) |
 | `HEADLESS_MODE` | false | Run without browser window |
-| `SCROLL_PAUSE_TIME` | 0.8 | Seconds between scrolls |
-| `MAX_SCROLLS` | 200 | Maximum scroll iterations |
+| `SCROLL_PAUSE_TIME` | 0.8 | Seconds between scrolls (adaptive for large boards) |
 | `RANDOM_DELAY_MIN` | 2 | Min delay between pins (seconds) |
 | `RANDOM_DELAY_MAX` | 5 | Max delay between pins (seconds) |
 | `LOG_FAILED_PINS` | true | Save failed pins to JSON |
+
+**Note:** `MAX_SCROLLS` removed - now uses smart auto-scroll detection that automatically stops when board end is reached.
 
 ## 📁 Project Structure
 
@@ -177,7 +204,7 @@ pinterest-board-automation/
 
 ### "No pins found"
 - Check `SOURCE_BOARD_URL` is correct and accessible
-- Increase `MAX_SCROLLS` for large boards
+- Smart auto-scroll will detect all pins automatically
 - Verify board is public
 
 ### "Target board not found"
@@ -206,14 +233,17 @@ pinterest-board-automation/
 
 ## 📊 Performance
 
-| Board Size | Estimated Time |
-|-----------|-----------------|
-| 1-50 pins | 2-5 minutes |
-| 50-200 pins | 10-20 minutes |
-| 200-500 pins | 30-60 minutes |
-| 500+ pins | 1-2 hours |
+| Board Size | Estimated Time | Notes |
+|-----------|-----------------|-------|
+| 1-50 pins | 2-5 minutes | Quick copy |
+| 50-200 pins | 10-20 minutes | Standard boards |
+| 200-500 pins | 30-60 minutes | Large boards |
+| 500-1000 pins | 1-2 hours | Checkpoint saved every 100 pins |
+| 1000+ pins | 2-4 hours | Resume anytime with Ctrl+C |
 
-*Times vary based on delay settings and board loading speed*
+*Times vary based on delay settings, board loading speed, and network conditions*
+
+**🔥 NEW:** Interrupted transfers can be resumed from checkpoint - no need to start over!
 
 ## 🐛 Issues & Support
 

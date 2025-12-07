@@ -187,10 +187,10 @@ Before submitting PR:
 
 ### High Priority
 - [ ] Add support for private boards
-- [ ] Implement retry logic for failed pins
-- [ ] Add progress bar UI
+- [x] ~~Implement retry logic for failed pins~~ ✅ DONE (v2.0)
+- [x] ~~Add progress bar UI~~ ✅ DONE (v2.0)
 - [ ] Support for multiple target boards
-- [ ] Add duplicate pin detection
+- [x] ~~Add duplicate pin detection~~ ✅ DONE (v2.0)
 
 ### Medium Priority
 - [ ] Add configuration via CLI arguments
