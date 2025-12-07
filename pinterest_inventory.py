@@ -95,8 +95,10 @@ class PinterestInventoryManager:
         if remaining_pins:
             try:
                 resume_index = inventory['pins'].index(remaining_pins[0])
-            except ValueError:
-                pass
+            except (ValueError, IndexError):
+                resume_index = len(all_saved_pins)  # Fallback to count
+        else:
+            resume_index = len(inventory['pins'])  # All done
         
         # Log report
         self.logger.log_info("-" * 60)
@@ -167,6 +169,10 @@ class PinterestInventoryManager:
         if not remaining_pins:
             self.logger.log_success("✅ All pins already saved! Nothing to do.")
             return False
+        
+        # Handle None resume_index
+        if resume_index is None:
+            resume_index = 0
         
         self.logger.log_info(f"✅ Ready to resume from pin #{resume_index + 1}")
         self.logger.log_info(f"   {len(remaining_pins)} pins remaining to save")

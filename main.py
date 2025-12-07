@@ -154,6 +154,7 @@ def run_retry_failed(driver_manager, logger):
     """Retry mode: Retry only failed pins from last run"""
     logger.log_info("MODE: Retry Failed Pins")
     logger.log_info("-" * 60)
+    driver = driver_manager.create_driver(use_profile=False)
     auth = PinterestAuth(driver, logger)
     saver = PinterestSaver(driver, logger)
 

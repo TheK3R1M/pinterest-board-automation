@@ -109,6 +109,16 @@ class PinterestScraper:
                     "window.scrollTo(0, document.body.scrollHeight);"
                 )
                 time.sleep(adaptive_pause)
+
+                # Wait for render: attempt to detect new pins
+                wait_count = 0
+                while wait_count < 6:
+                    new_pins = self.driver.find_elements(By.XPATH, "//a[contains(@href, '/pin/')]")
+                    if len(new_pins) > current_pin_count:
+                        break
+                    time.sleep(0.3)
+                    wait_count += 1
+
                 scroll_count += 1
                 consecutive_errors = 0  # Reset on success
 
