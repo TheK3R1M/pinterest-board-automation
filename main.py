@@ -30,7 +30,7 @@ from logger import PinterestLogger
 from driver_manager import DriverManager
 from pinterest_auth import PinterestAuth
 from pinterest_scraper import PinterestScraper
-from pinterest_saver import PinterestSaver
+from pinterest_saver import PinterestSaver, PinterestBlockError
 from pinterest_inventory import PinterestInventoryManager
 
 def main():
@@ -207,30 +207,47 @@ def run_retry_failed(driver_manager, logger):
                 logger.log_warning(f"Skipping invalid pin data: {pin_data}")
                 pbar.update(1)
                 continue
-            
-            try:
-                if saver.save_pin_to_board(pin_url, Config.TARGET_BOARD_NAME):
-                    logger.add_success_pin(pin_url)
-                    successful_count += 1
-                    pbar.set_postfix({"✅": successful_count, "❌": failed_count}, refresh=False)
-                else:
-                    logger.add_failed_pin(pin_url, "Retry failed")
+
+            block_retry = 0
+            while True:
+                try:
+                    if saver.save_pin_to_board(pin_url, Config.TARGET_BOARD_NAME):
+                        logger.add_success_pin(pin_url)
+                        successful_count += 1
+                        pbar.set_postfix({"✅": successful_count, "❌": failed_count}, refresh=False)
+                    else:
+                        logger.add_failed_pin(pin_url, "Retry failed")
+                        failed_count += 1
+                        pbar.set_postfix({"✅": successful_count, "❌": failed_count}, refresh=False)
+                    
+                    pbar.update(1)
+                    
+                    # Human-like delay
+                    delay = Config.RANDOM_DELAY_MIN + random.random() * (
+                        Config.RANDOM_DELAY_MAX - Config.RANDOM_DELAY_MIN
+                    )
+                    time.sleep(delay)
+                    break
+                    
+                except PinterestBlockError:
+                    block_retry += 1
+                    wait_plan = [300, 600, 900]
+                    wait_seconds = wait_plan[min(block_retry - 1, len(wait_plan) - 1)]
+                    logger.log_warning(f"⚠️ Pinterest block during retry | attempt {block_retry}/3 | waiting {wait_seconds//60} min")
+                    if block_retry >= 3:
+                        logger.add_failed_pin(pin_url, "Block after retries")
+                        failed_count += 1
+                        pbar.update(1)
+                        break
+                    time.sleep(wait_seconds)
+                    continue
+
+                except Exception as e:
+                    logger.log_error(f"Retry error: {pin_url}", e)
+                    logger.add_failed_pin(pin_url, str(e))
                     failed_count += 1
-                    pbar.set_postfix({"✅": successful_count, "❌": failed_count}, refresh=False)
-                
-                pbar.update(1)
-                
-                # Human-like delay
-                delay = Config.RANDOM_DELAY_MIN + random.random() * (
-                    Config.RANDOM_DELAY_MAX - Config.RANDOM_DELAY_MIN
-                )
-                time.sleep(delay)
-                
-            except Exception as e:
-                logger.log_error(f"Retry error: {pin_url}", e)
-                logger.add_failed_pin(pin_url, str(e))
-                failed_count += 1
-                pbar.update(1)
+                    pbar.update(1)
+                    break
     
     logger.log_info("-" * 60)
     logger.log_success(f"Retry completed: {successful_count} successful, {failed_count} failed")
@@ -302,48 +319,68 @@ def copy_board(scraper, saver, logger):
                   bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]') as pbar:
             
             for idx, pin_url in enumerate(remaining_pins, 1):
-                try:
-                    # Save pin
-                    if saver.save_pin_to_board(pin_url, Config.TARGET_BOARD_NAME):
-                        logger.add_success_pin(pin_url)
-                        successful_count += 1
-                        processed_pins.add(pin_url)  # Track processed
-                        pbar.set_postfix({"✅": successful_count, "❌": failed_count}, refresh=False)
-                        
-                        # Mark in inventory (real-time checkpoint)
-                        inventory_mgr.mark_pin_saved(pin_url)
-                    else:
-                        logger.add_failed_pin(pin_url, "Save failed")
-                        failed_pins_dict[pin_url] = "Save failed"
+                block_retry = 0
+                while True:
+                    try:
+                        # Save pin
+                        if saver.save_pin_to_board(pin_url, Config.TARGET_BOARD_NAME):
+                            logger.add_success_pin(pin_url)
+                            successful_count += 1
+                            processed_pins.add(pin_url)  # Track processed
+                            pbar.set_postfix({"✅": successful_count, "❌": failed_count}, refresh=False)
+                            
+                            # Mark in inventory (real-time checkpoint)
+                            inventory_mgr.mark_pin_saved(pin_url)
+                        else:
+                            logger.add_failed_pin(pin_url, "Save failed")
+                            failed_pins_dict[pin_url] = "Save failed"
+                            failed_count += 1
+                            processed_pins.add(pin_url)  # Track as processed even if failed
+                            pbar.set_postfix({"✅": successful_count, "❌": failed_count}, refresh=False)
+
+                        pbar.update(1)
+
+                        # Auto-save checkpoint every batch_size pins (only if progress_file exists)
+                        if idx % batch_size == 0 and progress_file:
+                            _save_checkpoint(progress_file, processed_pins, logger)
+                        delay = Config.RANDOM_DELAY_MIN + random.random() * (
+                            Config.RANDOM_DELAY_MAX - Config.RANDOM_DELAY_MIN
+                        )
+                        time.sleep(delay)
+                        break  # pin done
+
+                    except PinterestBlockError as blk:
+                        block_retry += 1
+                        wait_plan = [300, 600, 900]  # 5, 10, 15 minutes
+                        wait_seconds = wait_plan[min(block_retry - 1, len(wait_plan) - 1)]
+                        logger.log_warning(f"⚠️ Pinterest block detected on pin {pin_url} | attempt {block_retry}/3 | waiting {wait_seconds//60} min")
+                        if block_retry >= 3:
+                            logger.add_failed_pin(pin_url, "Block after retries")
+                            failed_pins_dict[pin_url] = "Block after retries"
+                            failed_count += 1
+                            processed_pins.add(pin_url)
+                            pbar.update(1)
+                            break
+                        time.sleep(wait_seconds)
+                        continue  # retry same pin after backoff
+
+                    except KeyboardInterrupt:
+                        print()  # New line after progress bar
+                        logger.log_warning("⚠️  Stopped by user!")
+                        if progress_file:
+                            _save_checkpoint(progress_file, processed_pins, logger)
+                        logger.log_info(f"Progress saved: {idx}/{len(remaining_pins)} pins processed")
+                        logger.log_info("💡 Run 'python main.py copy' again to resume from this point")
+                        raise
+
+                    except Exception as e:
+                        logger.log_error(f"Pin processing error: {pin_url}", e)
+                        logger.add_failed_pin(pin_url, str(e))
+                        failed_pins_dict[pin_url] = str(e)
                         failed_count += 1
-                        processed_pins.add(pin_url)  # Track as processed even if failed
-                        pbar.set_postfix({"✅": successful_count, "❌": failed_count}, refresh=False)
-
-                    pbar.update(1)
-
-                    # Auto-save checkpoint every batch_size pins (only if progress_file exists)
-                    if idx % batch_size == 0 and progress_file:
-                        _save_checkpoint(progress_file, processed_pins, logger)
-                    delay = Config.RANDOM_DELAY_MIN + random.random() * (
-                        Config.RANDOM_DELAY_MAX - Config.RANDOM_DELAY_MIN
-                    )
-                    time.sleep(delay)
-
-                except KeyboardInterrupt:
-                    print()  # New line after progress bar
-                    logger.log_warning("⚠️  Stopped by user!")
-                    if progress_file:
-                        _save_checkpoint(progress_file, processed_pins, logger)
-                    logger.log_info(f"Progress saved: {idx}/{len(remaining_pins)} pins processed")
-                    logger.log_info("💡 Run 'python main.py copy' again to resume from this point")
-                    raise
-
-                except Exception as e:
-                    logger.log_error(f"Pin processing error: {pin_url}", e)
-                    logger.add_failed_pin(pin_url, str(e))
-                    failed_pins_dict[pin_url] = str(e)
-                    failed_count += 1
-                    pbar.update(1)
+                        processed_pins.add(pin_url)
+                        pbar.update(1)
+                        break
 
         # Clean up checkpoint on successful completion
         print()  # New line after progress bar

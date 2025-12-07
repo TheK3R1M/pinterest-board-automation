@@ -20,6 +20,11 @@ from selenium.webdriver.common.action_chains import ActionChains
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from config import Config
 
+
+class PinterestBlockError(Exception):
+    """Raised when Pinterest blocks actions (captcha / rate limit)."""
+    pass
+
 class PinterestSaver:
     """Saves pins to Pinterest boards - OPTIMIZED"""
 
@@ -38,11 +43,8 @@ class PinterestSaver:
             self.driver.get(pin_url)
             time.sleep(1)  # Reduced from 2s
 
-            # YENI: Pinterest session/captcha kontrolü
-            if self._check_for_blocks():
-                self.logger.log_error("⚠️ Pinterest bloğu tespit edildi (captcha/rate limit)")
-                self.logger.log_warning("💡 5 dakika bekleyin ve tekrar deneyin")
-                return False
+            # Block / captcha detection -> raise to caller so it can back off
+            self._assert_not_blocked()
 
             # Check if already saved
             if self._is_already_saved():
@@ -66,35 +68,46 @@ class PinterestSaver:
             self.logger.log_error(f"Error saving pin: {pin_url}", e)
             return False
 
-    def _check_for_blocks(self):
-        """Pinterest captcha veya rate limit kontrolü"""
+    def _assert_not_blocked(self):
+        """Detect only definite blocks; otherwise let flow continue."""
         try:
-            page_source = self.driver.page_source.lower()
-            
-            # Captcha, rate limit veya block göstergeleri
-            block_indicators = [
-                'captcha',
-                'suspicious activity',
-                'robot',
-                'verify you',
-                'şüpheli aktivite',
-                'doğrula',
-                'rate limit',
-                'too many requests',
-                'çok fazla istek'
-            ]
-            
-            for indicator in block_indicators:
-                if indicator in page_source:
-                    return True
-            
-            # Giriş sayfasına yönlendirilmiş mi?
+            # Strong signals only
+            # 1) Redirected to login (session lost)
             if 'login' in self.driver.current_url.lower() and '/pin/' not in self.driver.current_url:
-                return True
-                
-            return False
-        except:
-            return False
+                raise PinterestBlockError("Redirected to login (session expired / block)")
+
+            page_source = self.driver.page_source.lower()
+
+            # 2) Explicit captcha keywords (strict)
+            strict_indicators = ['hcaptcha', 'g-recaptcha', 'showcaptcha']
+            for indicator in strict_indicators:
+                if indicator in page_source:
+                    raise PinterestBlockError("Explicit captcha detected")
+
+            # 3) Fallback: allow if any save/saved button is present (assume not blocked)
+            try:
+                self.driver.find_element(
+                    By.XPATH,
+                    "//button[contains(@aria-label, 'Save') or contains(@aria-label, 'Kaydet') or contains(., 'Save') or contains(., 'Kaydet') or contains(., 'Saved') or contains(., 'Kaydedildi')]"
+                )
+                return
+            except Exception:
+                pass
+
+            # Soft keywords - do NOT raise, just warn
+            soft_indicators = ['captcha', 'verify you', 'suspicious activity', 'too many requests']
+            for indicator in soft_indicators:
+                if indicator in page_source:
+                    self.logger.log_warning("Possible block text detected but proceeding (soft match)")
+                    return
+
+            # If nothing found, proceed
+            return
+
+        except PinterestBlockError:
+            raise
+        except Exception:
+            return
 
     def _is_already_saved(self):
         """Check if pin is already saved"""
@@ -189,27 +202,35 @@ class PinterestSaver:
             # Wait for dialog to be present
             dialog = None
             try:
-                dialog = WebDriverWait(self.driver, 2).until(
+                dialog = WebDriverWait(self.driver, 5).until(
                     EC.presence_of_element_located((By.XPATH, "//div[@role='dialog']"))
                 )
                 self.logger.log_info("Dialog opened")
             except:
-                self.logger.log_warning("Dialog not found")
-            
-            # Scroll dialog to load all boards
-            if dialog:
+                self.logger.log_warning("Dialog not found - trying 'See all boards'")
+                self._try_see_all_boards()
                 try:
-                    for _ in range(3):
-                        self.driver.execute_script("arguments[0].scrollTop += 300", dialog)
-                        time.sleep(0.3)
+                    dialog = WebDriverWait(self.driver, 5).until(
+                        EC.presence_of_element_located((By.XPATH, "//div[@role='dialog']"))
+                    )
+                    self.logger.log_info("Dialog opened after fallback")
                 except:
-                    pass
+                    self.logger.log_error("Board dialog still not found; skipping pin")
+                    return False
+            
+            # Scroll dialog to load all boards (dialog required)
+            try:
+                for _ in range(4):
+                    self.driver.execute_script("arguments[0].scrollTop += 400", dialog)
+                    time.sleep(0.3)
+            except Exception as e:
+                self.logger.log_warning(f"Dialog scroll failed: {e}")
             
             self.logger.log_info(f"🔍 Searching for board: '{target_board_name}'")
             time.sleep(0.3)
             
-            # Get all text elements in dialog/page
-            all_elements = self.driver.find_elements(By.XPATH, "//*[text()]")
+            # Get all text elements inside dialog only (avoid page noise)
+            all_elements = dialog.find_elements(By.XPATH, ".//*[text()]")
             
             found_matches = []
             for elem in all_elements:
@@ -220,16 +241,23 @@ class PinterestSaver:
                     if not text or len(text) < 1 or len(text) > 100:
                         continue
                     
-                    # Exact case-insensitive match
-                    if target_board_name.lower() == text.lower():
-                        found_matches.append((elem, text))
-                        self.logger.log_info(f"✅ Found board: '{text}'")
+                    name_l = target_board_name.lower()
+                    text_l = text.lower()
+
+                    # Exact match first
+                    if name_l == text_l:
+                        found_matches.append((0, elem, text))  # priority 0 = exact
+                        self.logger.log_info(f"✅ Found board: '{text}' (exact)")
+                    # Partial contains fallback
+                    elif name_l in text_l:
+                        found_matches.append((1, elem, text))  # priority 1 = partial
+                        self.logger.log_info(f"⚪ Possible board match: '{text}' (partial)")
                 
                 except:
                     continue
             
-            # Try to click each match
-            for elem, text in found_matches:
+            # Try to click each match ordered by priority (exact first)
+            for _, elem, text in sorted(found_matches, key=lambda x: x[0]):
                 try:
                     # Make sure element is visible
                     self.driver.execute_script("arguments[0].scrollIntoView(true);", elem)
@@ -259,16 +287,14 @@ class PinterestSaver:
                 sample_texts = []
                 for elem in all_elements[:10]:
                     try:
-                        sample_texts.append(elem.text.strip())
+                        txt = elem.text.strip()
+                        if txt:
+                            sample_texts.append(txt)
                     except:
                         pass
                 if sample_texts:
                     self.logger.log_info(f"Sample available items: {sample_texts}")
             
-            return False
-        
-        except Exception as e:
-            self.logger.log_error("Board selection error", e)
             return False
         except Exception as e:
             self.logger.log_error("Board selection error", e)
