@@ -58,21 +58,112 @@ Then open a Pull Request on GitHub with:
 
 ## Development Setup
 
+### Prerequisites
+- Python 3.8 or higher
+- Git
+- Google Chrome
+- Text editor or IDE (VS Code recommended)
+
+### Step-by-Step Setup
+
+**1. Clone repository**
 ```bash
-# Clone repository
-git clone https://github.com/yourusername/pinterest-board-automation.git
+git clone https://github.com/YOUR_GITHUB_USERNAME/pinterest-board-automation.git
 cd pinterest-board-automation
+```
 
-# Create virtual environment
+*Note: Replace `YOUR_GITHUB_USERNAME` with your actual GitHub username*
+
+**2. Create virtual environment**
+
+**Windows (PowerShell):**
+```powershell
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+.\venv\Scripts\Activate.ps1
+```
 
-# Install dependencies
+**Linux/macOS:**
+```bash
+python3 -m venv venv
+source venv/bin/activate
+```
+
+**3. Install dependencies**
+```bash
 pip install -r requirements.txt
+```
 
-# Copy and configure .env
+**4. Configure environment**
+
+**Windows (PowerShell):**
+```powershell
+Copy-Item .env.example .env
+notepad .env  # Edit with Notepad or VS Code
+```
+
+**Linux/macOS:**
+```bash
 cp .env.example .env
-# Edit .env with your settings
+nano .env  # Or use your preferred editor
+```
+
+Required variables:
+```env
+PINTEREST_EMAIL=your.email@example.com
+PINTEREST_PASSWORD=your_password
+SOURCE_BOARD_URL=https://www.pinterest.com/username/source-board/
+TARGET_BOARD_NAME=Target Board Name
+```
+
+**5. Test the setup**
+
+```bash
+# Test login (creates cookies)
+python main.py login
+
+# Test copying pins
+python main.py copy
+```
+
+### Project Structure
+```
+pinterest-board-automation/
+├── main.py                 # Entry point & CLI
+├── config.py              # Configuration loader
+├── logger.py              # Logging system
+├── driver_manager.py      # WebDriver management
+├── pinterest_auth.py      # Authentication & cookies
+├── pinterest_scraper.py   # Pin collection
+├── pinterest_saver.py     # Pin saving logic
+├── requirements.txt       # Dependencies
+├── .env.example           # Configuration template
+├── .gitignore             # Git ignore rules
+├── LICENSE                # MIT License
+├── README.md              # User documentation
+├── CONTRIBUTING.md        # This file
+└── logs/                  # Auto-generated logs
+```
+
+### Running the Code
+
+**Full workflow:**
+```bash
+# 1. Login (one-time or when cookies expire)
+python main.py login
+
+# 2. Copy pins
+python main.py copy
+
+# 3. Check results
+# - View logs/ folder for success_pins_*.json and failed_pins_*.json
+# - Check your Pinterest account for copied pins
+```
+
+**For troubleshooting:**
+```bash
+# Run with headless disabled to see browser
+# Edit .env and set: HEADLESS_MODE=false
+python main.py copy
 ```
 
 ## Code Style

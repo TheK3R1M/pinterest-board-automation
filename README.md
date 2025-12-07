@@ -34,12 +34,33 @@ git clone https://github.com/YOUR_USERNAME/pinterest-board-automation.git
 cd pinterest-board-automation
 ```
 
-2. **Install dependencies**
+2. **Create virtual environment** (optional but recommended)
+
+**Windows (PowerShell):**
+```powershell
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+```
+
+**Linux/macOS:**
+```bash
+python3 -m venv venv
+source venv/bin/activate
+```
+
+3. **Install dependencies**
 ```bash
 pip install -r requirements.txt
 ```
 
-3. **Configure environment**
+4. **Configure environment**
+
+**Windows (PowerShell):**
+```powershell
+Copy-Item .env.example .env
+```
+
+**Linux/macOS:**
 ```bash
 cp .env.example .env
 ```
@@ -55,28 +76,59 @@ TARGET_BOARD_NAME=Target Board Name
 ### Usage
 
 #### Step 1: Initial Login (One-time)
-```bash
+
+**Windows (PowerShell):**
+```powershell
 python main.py login
 ```
-- Browser opens Pinterest login
-- Enter credentials
-- Complete 2FA if prompted
-- Cookies saved automatically
+
+**Linux/macOS:**
+```bash
+python3 main.py login
+```
+
+- Browser opens Pinterest login page
+- Enter your email and password
+- Complete 2FA if prompted (2-factor authentication)
+- Cookies are saved automatically to `pinterest_cookies.json`
 
 #### Step 2: Copy Pins
-```bash
+
+**Windows (PowerShell):**
+```powershell
 python main.py copy
 ```
-- Loads saved cookies
-- Collects pins from source board
+
+**Linux/macOS:**
+```bash
+python3 main.py copy
+```
+
+- Loads saved cookies from previous login
+- Collects all pins from source board
 - Saves each pin to target board
-- Logs results to JSON
+- Logs results to JSON files in `logs/` directory
+- Shows progress every 50 pins
 
 #### Alternative: Use Chrome Profile
-```bash
+
+**Windows (PowerShell):**
+```powershell
 python main.py profile
 ```
-Uses existing Chrome profile (set `CHROME_PROFILE_PATH` in `.env`)
+
+**Linux/macOS:**
+```bash
+python3 main.py profile
+```
+
+Uses existing Chrome profile (first set `CHROME_PROFILE_PATH` in `.env`)
+
+#### Check Your Results
+
+After copying, check the `logs/` folder for:
+- `success_pins_TIMESTAMP.json` - Successfully saved pins
+- `failed_pins_TIMESTAMP.json` - Pins that failed (with reasons)
 
 ## 📋 Configuration
 
