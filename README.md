@@ -30,7 +30,7 @@ Automated Pinterest board-to-board pin copying tool using Python and Selenium. C
 
 1. **Clone repository**
 ```bash
-git clone https://github.com/YOUR_USERNAME/pinterest-board-automation.git
+git clone https://github.com/TheK3R1M/pinterest-board-automation.git
 cd pinterest-board-automation
 ```
 
