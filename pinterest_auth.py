@@ -49,23 +49,40 @@ class PinterestAuth:
             )
             login_button.click()
             
-            # Wait for 2FA or redirect
+            # Wait for login and check for 2FA
             self.logger.log_info("Waiting for login (2FA supported - complete if prompted)...")
             time.sleep(5)
-            
-            # Check if 2FA is required
-            try:
-                two_fa_element = self.driver.find_element(
-                    By.XPATH, "//*[contains(text(), 'verification') or contains(text(), 'code')]"
-                )
-                self.logger.log_warning("2FA detected! Please complete verification in browser...")
-                self.logger.log_info("Waiting up to 120 seconds for 2FA completion...")
-                time.sleep(120)  # Wait 2 minutes for user to complete 2FA
-            except:
-                pass  # No 2FA, continue
-            
-            # Verify login success
-            time.sleep(5)
+
+            # Smart 2FA detection with polling
+            max_wait_time = 120  # Maximum 2 minutes
+            poll_interval = 5    # Check every 5 seconds
+            elapsed_time = 0
+            two_fa_detected = False
+
+            while elapsed_time < max_wait_time:
+                # Check if already logged in
+                if self._is_logged_in():
+                    if two_fa_detected:
+                        self.logger.log_success("2FA completed successfully!")
+                    break
+
+                # Check if 2FA is present
+                try:
+                    self.driver.find_element(
+                        By.XPATH, "//*[contains(text(), 'verification') or contains(text(), 'code')]"
+                    )
+                    if not two_fa_detected:
+                        self.logger.log_warning("2FA detected! Please complete verification in browser...")
+                        self.logger.log_info("Waiting up to 120 seconds for 2FA completion...")
+                        two_fa_detected = True
+                except:
+                    pass  # No 2FA element found
+
+                time.sleep(poll_interval)
+                elapsed_time += poll_interval
+
+            # Final verification
+            time.sleep(2)
             if self._is_logged_in():
                 self.logger.log_success("Login successful!")
                 return True

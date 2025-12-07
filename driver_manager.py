@@ -44,11 +44,14 @@ class DriverManager:
         chrome_options.add_argument("--disable-gpu")
         chrome_options.add_argument("--window-size=1920,1080")
         
-        # Exclude automation flags
-        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        chrome_options.add_experimental_option("useAutomationExtension", False)
-        
-        # Get ChromeDriver path
+        # Suppress Chrome error logs
+        chrome_options.add_argument("--log-level=3")
+        chrome_options.add_argument("--disable-logging")
+        chrome_options.add_argument("--silent")
+
+        # Exclude automation flags and logging
+        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
+        chrome_options.add_experimental_option("useAutomationExtension", False)        # Get ChromeDriver path
         try:
             driver_path = ChromeDriverManager().install()
             self.logger.log_info(f"webdriver-manager path: {driver_path}")
