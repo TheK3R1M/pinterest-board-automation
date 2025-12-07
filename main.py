@@ -23,6 +23,8 @@ import time
 import json
 import random
 import argparse
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from tqdm import tqdm
 from config import Config
@@ -310,79 +312,172 @@ def copy_board(scraper, saver, logger):
 
         logger.log_info("-" * 60)
 
-        # Progress tracking (counters already initialized at top of function)
-        failed_pins_dict = {}
-        batch_size = 100
-        start_time = time.time()
-        
-        # Save each pin with progress bar
-        print()  # New line for progress bar
-        with tqdm(total=len(remaining_pins), desc="💾 Saving pins", unit="pin", 
-                  bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]') as pbar:
+        worker_count = max(1, Config.MAX_PARALLEL_WORKERS)
+
+        # Sequential path (default)
+        if worker_count == 1:
+            failed_pins_dict = {}
+            batch_size = 100
+            start_time = time.time()
             
-            for idx, pin_url in enumerate(remaining_pins, 1):
-                block_retry = 0
-                while True:
-                    try:
-                        # Save pin
-                        if saver.save_pin_to_board(pin_url, Config.TARGET_BOARD_NAME):
-                            logger.add_success_pin(pin_url)
-                            successful_count += 1
-                            processed_pins.add(pin_url)  # Track processed
-                            pbar.set_postfix({"✅": successful_count, "❌": failed_count}, refresh=False)
-                            
-                            # Mark in inventory (real-time checkpoint)
-                            inventory_mgr.mark_pin_saved(pin_url)
-                        else:
-                            logger.add_failed_pin(pin_url, "Save failed")
-                            failed_pins_dict[pin_url] = "Save failed"
-                            failed_count += 1
-                            processed_pins.add(pin_url)  # Track as processed even if failed
-                            pbar.set_postfix({"✅": successful_count, "❌": failed_count}, refresh=False)
+            print()  # New line for progress bar
+            with tqdm(total=len(remaining_pins), desc="💾 Saving pins", unit="pin", 
+                      bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]') as pbar:
+                
+                for idx, pin_url in enumerate(remaining_pins, 1):
+                    block_retry = 0
+                    while True:
+                        try:
+                            # Save pin
+                            if saver.save_pin_to_board(pin_url, Config.TARGET_BOARD_NAME):
+                                logger.add_success_pin(pin_url)
+                                successful_count += 1
+                                processed_pins.add(pin_url)  # Track processed
+                                pbar.set_postfix({"✅": successful_count, "❌": failed_count}, refresh=False)
+                                
+                                # Mark in inventory (real-time checkpoint)
+                                inventory_mgr.mark_pin_saved(pin_url)
+                            else:
+                                logger.add_failed_pin(pin_url, "Save failed")
+                                failed_pins_dict[pin_url] = "Save failed"
+                                failed_count += 1
+                                processed_pins.add(pin_url)  # Track as processed even if failed
+                                pbar.set_postfix({"✅": successful_count, "❌": failed_count}, refresh=False)
 
-                        pbar.update(1)
+                            pbar.update(1)
 
-                        # Auto-save checkpoint every batch_size pins (only if progress_file exists)
-                        if idx % batch_size == 0 and progress_file:
-                            _save_checkpoint(progress_file, processed_pins, logger)
-                        delay = Config.RANDOM_DELAY_MIN + random.random() * (
-                            Config.RANDOM_DELAY_MAX - Config.RANDOM_DELAY_MIN
-                        )
-                        time.sleep(delay)
-                        break  # pin done
+                            # Auto-save checkpoint every batch_size pins (only if progress_file exists)
+                            if idx % batch_size == 0 and progress_file:
+                                _save_checkpoint(progress_file, processed_pins, logger)
+                            delay = Config.RANDOM_DELAY_MIN + random.random() * (
+                                Config.RANDOM_DELAY_MAX - Config.RANDOM_DELAY_MIN
+                            )
+                            time.sleep(delay)
+                            break  # pin done
 
-                    except PinterestBlockError as blk:
-                        block_retry += 1
-                        wait_plan = [300, 600, 900]  # 5, 10, 15 minutes
-                        wait_seconds = wait_plan[min(block_retry - 1, len(wait_plan) - 1)]
-                        logger.log_warning(f"⚠️ Pinterest block detected on pin {pin_url} | attempt {block_retry}/3 | waiting {wait_seconds//60} min")
-                        if block_retry >= 3:
-                            logger.add_failed_pin(pin_url, "Block after retries")
-                            failed_pins_dict[pin_url] = "Block after retries"
+                        except PinterestBlockError as blk:
+                            block_retry += 1
+                            wait_plan = [300, 600, 900]  # 5, 10, 15 minutes
+                            wait_seconds = wait_plan[min(block_retry - 1, len(wait_plan) - 1)]
+                            logger.log_warning(f"⚠️ Pinterest block detected on pin {pin_url} | attempt {block_retry}/3 | waiting {wait_seconds//60} min")
+                            if block_retry >= 3:
+                                logger.add_failed_pin(pin_url, "Block after retries")
+                                failed_pins_dict[pin_url] = "Block after retries"
+                                failed_count += 1
+                                processed_pins.add(pin_url)
+                                pbar.update(1)
+                                break
+                            time.sleep(wait_seconds)
+                            continue  # retry same pin after backoff
+
+                        except KeyboardInterrupt:
+                            print()  # New line after progress bar
+                            logger.log_warning("⚠️  Stopped by user!")
+                            if progress_file:
+                                _save_checkpoint(progress_file, processed_pins, logger)
+                            logger.log_info(f"Progress saved: {idx}/{len(remaining_pins)} pins processed")
+                            logger.log_info("💡 Run 'python main.py copy' again to resume from this point")
+                            raise
+
+                        except Exception as e:
+                            logger.log_error(f"Pin processing error: {pin_url}", e)
+                            logger.add_failed_pin(pin_url, str(e))
+                            failed_pins_dict[pin_url] = str(e)
                             failed_count += 1
                             processed_pins.add(pin_url)
                             pbar.update(1)
                             break
-                        time.sleep(wait_seconds)
-                        continue  # retry same pin after backoff
 
-                    except KeyboardInterrupt:
-                        print()  # New line after progress bar
-                        logger.log_warning("⚠️  Stopped by user!")
-                        if progress_file:
-                            _save_checkpoint(progress_file, processed_pins, logger)
-                        logger.log_info(f"Progress saved: {idx}/{len(remaining_pins)} pins processed")
-                        logger.log_info("💡 Run 'python main.py copy' again to resume from this point")
-                        raise
+        # Parallel path
+        else:
+            logger.log_info(f"⚡ Parallel mode: {worker_count} workers (round-robin pins)")
+            buckets = [[] for _ in range(worker_count)]
+            for idx, pin_url in enumerate(remaining_pins):
+                buckets[idx % worker_count].append(pin_url)
 
-                    except Exception as e:
-                        logger.log_error(f"Pin processing error: {pin_url}", e)
-                        logger.add_failed_pin(pin_url, str(e))
-                        failed_pins_dict[pin_url] = str(e)
-                        failed_count += 1
-                        processed_pins.add(pin_url)
-                        pbar.update(1)
-                        break
+            counters_lock = threading.Lock()
+            failed_pins_dict = {}
+            start_time = time.time()
+            shared_counts = {"success": 0, "failed": 0}
+
+            def worker_run(worker_id, pins_subset):
+                local_success = 0
+                local_failed = 0
+                driver_mgr = DriverManager(logger)
+                driver = driver_mgr.create_driver(use_profile=False)
+                auth = PinterestAuth(driver, logger)
+                if not auth.load_cookies():
+                    logger.log_error(f"[Worker {worker_id}] Cookie load failed")
+                    driver_mgr.quit()
+                    return local_success, local_failed
+                local_saver = PinterestSaver(driver, logger)
+                logger.log_info(f"[Worker {worker_id}] Started with {len(pins_subset)} pins")
+                for pin_url in pins_subset:
+                    block_retry = 0
+                    while True:
+                        try:
+                            if local_saver.save_pin_to_board(pin_url, Config.TARGET_BOARD_NAME):
+                                with counters_lock:
+                                    logger.add_success_pin(pin_url)
+                                    processed_pins.add(pin_url)
+                                    inventory_mgr.mark_pin_saved(pin_url)
+                                    local_success += 1
+                                    shared_counts["success"] += 1
+                            else:
+                                with counters_lock:
+                                    logger.add_failed_pin(pin_url, "Save failed")
+                                    failed_pins_dict[pin_url] = "Save failed"
+                                    processed_pins.add(pin_url)
+                                    local_failed += 1
+                                    shared_counts["failed"] += 1
+                            break
+                        except PinterestBlockError:
+                            block_retry += 1
+                            wait_plan = [300, 600, 900]
+                            wait_seconds = wait_plan[min(block_retry - 1, len(wait_plan) - 1)]
+                            logger.log_warning(f"[Worker {worker_id}] Block on {pin_url} attempt {block_retry}/3; waiting {wait_seconds//60} min")
+                            if block_retry >= 3:
+                                with counters_lock:
+                                    logger.add_failed_pin(pin_url, "Block after retries")
+                                    failed_pins_dict[pin_url] = "Block after retries"
+                                    processed_pins.add(pin_url)
+                                    local_failed += 1
+                                    shared_counts["failed"] += 1
+                                break
+                            time.sleep(wait_seconds)
+                            continue
+                        except Exception as e:
+                            with counters_lock:
+                                logger.log_error(f"[Worker {worker_id}] Error saving {pin_url}", e)
+                                logger.add_failed_pin(pin_url, str(e))
+                                failed_pins_dict[pin_url] = str(e)
+                                processed_pins.add(pin_url)
+                                local_failed += 1
+                                failed_count += 1
+                            break
+                    delay = Config.RANDOM_DELAY_MIN + random.random() * (
+                        Config.RANDOM_DELAY_MAX - Config.RANDOM_DELAY_MIN
+                    )
+                    time.sleep(delay)
+                driver_mgr.quit()
+                logger.log_info(f"[Worker {worker_id}] Done | ✅ {local_success} | ❌ {local_failed}")
+                return local_success, local_failed
+
+            with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                futures = {
+                    executor.submit(worker_run, worker_id, bucket): worker_id
+                    for worker_id, bucket in enumerate(buckets, 1)
+                    if bucket
+                }
+                for future in as_completed(futures):
+                    worker_id = futures[future]
+                    try:
+                        future.result()
+                    except Exception as exc:
+                        logger.log_error(f"[Worker {worker_id}] crashed: {exc}")
+
+            successful_count = shared_counts["success"]
+            failed_count = shared_counts["failed"]
 
         # Clean up checkpoint on successful completion
         print()  # New line after progress bar

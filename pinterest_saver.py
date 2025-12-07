@@ -47,20 +47,21 @@ class PinterestSaver:
             self.driver.get(pin_url)
             time.sleep(2)  # Increased to allow full page load
 
-            # LOST PIN/PANO detection
+            # LOST PIN/PANO detection (stricter)
             lost_keywords = [
-                "üzgünüz", "bulunamadı", "404", "pano yok", "Pin bulunamadı", "sayfa bulunamadı", "Sorry", "not found", "doesn't exist"
+                "üzgünüz", "bulunamadı", "404", "pano yok", "pin bulunamadı", "sayfa bulunamadı", "sorry", "not found", "doesn't exist"
             ]
             current_url = self.driver.current_url.lower()
             page_source = self.driver.page_source.lower()
-            is_lost = False
-            # Ana sayfa yönlendirme veya hata mesajı kontrolü
-            if (
-                any(kw in page_source for kw in lost_keywords)
-                or ("pinterest.com/" in current_url and ("/home" in current_url or current_url.rstrip("/") == "https://www.pinterest.com"))
-            ):
-                is_lost = True
-            if is_lost:
+            keyword_hit = any(kw in page_source for kw in lost_keywords)
+            has_pin_ui = self._has_pin_ui()
+
+            # If we got redirected to login, treat as block, not lost
+            if 'login' in current_url and '/pin/' not in current_url:
+                raise PinterestBlockError("Redirected to login while opening pin")
+
+            # Lost only when explicit error keywords AND pin UI missing
+            if keyword_hit and not has_pin_ui:
                 self.logger.log_error(f"[LOST] Pin silinmiş veya erişilemiyor: {pin_url}")
                 self._save_lost_pin(pin_url)
                 return False
@@ -115,6 +116,22 @@ class PinterestSaver:
             raise
         except Exception:
             return
+
+    def _has_pin_ui(self):
+        """Detect if pin closeup UI is present to avoid false lost detection."""
+        try:
+            selectors = [
+                (By.CSS_SELECTOR, "[data-test-id='pin-closeup']"),
+                (By.CSS_SELECTOR, "[data-test-id*='PinBetterCloseup']"),
+                (By.XPATH, "//div[contains(@data-test-id, 'closeup')]"),
+            ]
+            for by, sel in selectors:
+                elems = self.driver.find_elements(by, sel)
+                if elems:
+                    return True
+            return False
+        except Exception:
+            return False
 
     def _is_already_saved(self):
         """Check if pin is already saved"""
