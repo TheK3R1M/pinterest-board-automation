@@ -42,7 +42,8 @@ class DriverManager:
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument("--disable-gpu")
-        chrome_options.add_argument("--window-size=1920,1080")
+        chrome_options.add_argument("--window-size=800,600")  # Minimize window size
+        chrome_options.add_argument("--start-minimized")  # Start minimized
         
         # Suppress Chrome error logs
         chrome_options.add_argument("--log-level=3")
@@ -64,6 +65,13 @@ class DriverManager:
             
             # Create driver
             self.driver = webdriver.Chrome(service=service, options=chrome_options)
+            
+            # Move window off-screen to avoid distraction
+            try:
+                self.driver.execute_script("window.moveTo(9999, 9999);")  # Move off-screen
+            except:
+                pass
+            
             self.logger.log_success("WebDriver created successfully")
             
             return self.driver

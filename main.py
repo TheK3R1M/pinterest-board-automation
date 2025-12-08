@@ -396,9 +396,14 @@ def copy_board(scraper, saver, logger):
                 buckets[idx % worker_count].append(pin_url)
 
             counters_lock = threading.Lock()
+            pbar_lock = threading.Lock()
             failed_pins_dict = {}
             start_time = time.time()
             shared_counts = {"success": 0, "failed": 0}
+
+            print()  # New line for progress bar
+            pbar = tqdm(total=len(remaining_pins), desc="💾 Saving pins", unit="pin",
+                       bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]')
 
             def worker_run(worker_id, pins_subset):
                 local_success = 0
@@ -409,6 +414,9 @@ def copy_board(scraper, saver, logger):
                 if not auth.load_cookies():
                     logger.log_error(f"[Worker {worker_id}] Cookie load failed")
                     driver_mgr.quit()
+                    with pbar_lock:
+                        for _ in pins_subset:
+                            pbar.update(1)
                     return local_success, local_failed
                 local_saver = PinterestSaver(driver, logger)
                 logger.log_info(f"[Worker {worker_id}] Started with {len(pins_subset)} pins")
@@ -423,6 +431,8 @@ def copy_board(scraper, saver, logger):
                                     inventory_mgr.mark_pin_saved(pin_url)
                                     local_success += 1
                                     shared_counts["success"] += 1
+                                with pbar_lock:
+                                    pbar.set_postfix({"✅": shared_counts["success"], "❌": shared_counts["failed"]}, refresh=False)
                             else:
                                 with counters_lock:
                                     logger.add_failed_pin(pin_url, "Save failed")
@@ -430,6 +440,8 @@ def copy_board(scraper, saver, logger):
                                     processed_pins.add(pin_url)
                                     local_failed += 1
                                     shared_counts["failed"] += 1
+                                with pbar_lock:
+                                    pbar.set_postfix({"✅": shared_counts["success"], "❌": shared_counts["failed"]}, refresh=False)
                             break
                         except PinterestBlockError:
                             block_retry += 1
@@ -443,6 +455,9 @@ def copy_board(scraper, saver, logger):
                                     processed_pins.add(pin_url)
                                     local_failed += 1
                                     shared_counts["failed"] += 1
+                                with pbar_lock:
+                                    pbar.update(1)
+                                    pbar.set_postfix({"✅": shared_counts["success"], "❌": shared_counts["failed"]}, refresh=False)
                                 break
                             time.sleep(wait_seconds)
                             continue
@@ -453,8 +468,12 @@ def copy_board(scraper, saver, logger):
                                 failed_pins_dict[pin_url] = str(e)
                                 processed_pins.add(pin_url)
                                 local_failed += 1
-                                failed_count += 1
+                                shared_counts["failed"] += 1
+                            with pbar_lock:
+                                pbar.set_postfix({"✅": shared_counts["success"], "❌": shared_counts["failed"]}, refresh=False)
                             break
+                    with pbar_lock:
+                        pbar.update(1)
                     delay = Config.RANDOM_DELAY_MIN + random.random() * (
                         Config.RANDOM_DELAY_MAX - Config.RANDOM_DELAY_MIN
                     )
@@ -476,6 +495,7 @@ def copy_board(scraper, saver, logger):
                     except Exception as exc:
                         logger.log_error(f"[Worker {worker_id}] crashed: {exc}")
 
+            pbar.close()
             successful_count = shared_counts["success"]
             failed_count = shared_counts["failed"]
 
