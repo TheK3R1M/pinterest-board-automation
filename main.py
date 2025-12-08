@@ -123,15 +123,14 @@ def run_copy_with_cookies(driver_manager, logger):
     driver = driver_manager.create_driver(use_profile=False)
     auth = PinterestAuth(driver, logger)
     scraper = PinterestScraper(driver, logger)
-    saver = PinterestSaver(driver, logger)
 
     # Load cookies
     if not auth.load_cookies():
         logger.log_error("Cookie loading failed. Run 'python main.py login' first.")
         return
 
-    # Start board copy operation
-    copy_board(scraper, saver, logger)
+    # Start board copy operation (scraper will be closed after pin collection)
+    copy_board(scraper, driver_manager, logger)
 
 def run_copy_with_profile(driver_manager, logger):
     """Profile mode: Copy board using Chrome profile"""
@@ -147,10 +146,9 @@ def run_copy_with_profile(driver_manager, logger):
 
     driver = driver_manager.create_driver(use_profile=True)
     scraper = PinterestScraper(driver, logger)
-    saver = PinterestSaver(driver, logger)
 
     # Start board copy operation
-    copy_board(scraper, saver, logger)
+    copy_board(scraper, driver_manager, logger)
 
 def run_retry_failed(driver_manager, logger):
     """Retry mode: Retry only failed pins from last run"""
@@ -254,7 +252,7 @@ def run_retry_failed(driver_manager, logger):
     logger.log_info("-" * 60)
     logger.log_success(f"Retry completed: {successful_count} successful, {failed_count} failed")
 
-def copy_board(scraper, saver, logger):
+def copy_board(scraper, driver_manager, logger):
     """
     Copy board: collect and save pins
     ✨ v2.1+ Features:
@@ -262,6 +260,7 @@ def copy_board(scraper, saver, logger):
     - Auto-resume from checkpoint
     - Duplicate detection
     - Progress bar
+    - Single driver for scraping, multiple drivers for parallel saving
     """
     # Initialize counters at the top to avoid undefined errors
     successful_count = 0
@@ -283,9 +282,16 @@ def copy_board(scraper, saver, logger):
         # Initialize inventory manager
         inventory_mgr = PinterestInventoryManager(logger)
 
-        # Collect pins
-        logger.log_info("📍 Step 1: Scanning all pins from board...")
+        # Collect pins (single driver)
+        logger.log_info("📍 Step 1: Scanning all pins from board (single instance)...")
         pin_links = scraper.collect_pin_links(Config.SOURCE_BOARD_URL)
+        
+        # Close scraper driver after collection to free resources
+        logger.log_info("📍 Pin collection complete, closing scraper driver...")
+        try:
+            scraper.driver.quit()
+        except:
+            pass
 
         if not pin_links:
             logger.log_error("No pins found!")
@@ -314,8 +320,16 @@ def copy_board(scraper, saver, logger):
 
         worker_count = max(1, Config.MAX_PARALLEL_WORKERS)
 
-        # Sequential path (default)
+        # Sequential path (default) - create single driver for saving
         if worker_count == 1:
+            # Create new driver for saving
+            driver = driver_manager.create_driver(use_profile=False)
+            auth = PinterestAuth(driver, logger)
+            if not auth.load_cookies():
+                logger.log_error("Cookie loading failed for saver")
+                return
+            saver = PinterestSaver(driver, logger)
+            
             failed_pins_dict = {}
             batch_size = 100
             start_time = time.time()
@@ -395,8 +409,7 @@ def copy_board(scraper, saver, logger):
             for idx, pin_url in enumerate(remaining_pins):
                 buckets[idx % worker_count].append(pin_url)
 
-            counters_lock = threading.Lock()
-            pbar_lock = threading.Lock()
+            counters_lock = threading.Lock()  # Single lock for all shared resources
             failed_pins_dict = {}
             start_time = time.time()
             shared_counts = {"success": 0, "failed": 0}
@@ -414,7 +427,7 @@ def copy_board(scraper, saver, logger):
                 if not auth.load_cookies():
                     logger.log_error(f"[Worker {worker_id}] Cookie load failed")
                     driver_mgr.quit()
-                    with pbar_lock:
+                    with counters_lock:
                         for _ in pins_subset:
                             pbar.update(1)
                     return local_success, local_failed
@@ -425,23 +438,25 @@ def copy_board(scraper, saver, logger):
                     while True:
                         try:
                             if local_saver.save_pin_to_board(pin_url, Config.TARGET_BOARD_NAME):
+                                local_success += 1
+                                # Batch update to reduce lock contention
                                 with counters_lock:
                                     logger.add_success_pin(pin_url)
                                     processed_pins.add(pin_url)
                                     inventory_mgr.mark_pin_saved(pin_url)
-                                    local_success += 1
                                     shared_counts["success"] += 1
-                                with pbar_lock:
+                                    # Update progress bar inside same lock to reduce overhead
                                     pbar.set_postfix({"✅": shared_counts["success"], "❌": shared_counts["failed"]}, refresh=False)
+                                    pbar.update(1)
                             else:
+                                local_failed += 1
                                 with counters_lock:
                                     logger.add_failed_pin(pin_url, "Save failed")
                                     failed_pins_dict[pin_url] = "Save failed"
                                     processed_pins.add(pin_url)
-                                    local_failed += 1
                                     shared_counts["failed"] += 1
-                                with pbar_lock:
                                     pbar.set_postfix({"✅": shared_counts["success"], "❌": shared_counts["failed"]}, refresh=False)
+                                    pbar.update(1)
                             break
                         except PinterestBlockError:
                             block_retry += 1
@@ -449,31 +464,28 @@ def copy_board(scraper, saver, logger):
                             wait_seconds = wait_plan[min(block_retry - 1, len(wait_plan) - 1)]
                             logger.log_warning(f"[Worker {worker_id}] Block on {pin_url} attempt {block_retry}/3; waiting {wait_seconds//60} min")
                             if block_retry >= 3:
+                                local_failed += 1
                                 with counters_lock:
                                     logger.add_failed_pin(pin_url, "Block after retries")
                                     failed_pins_dict[pin_url] = "Block after retries"
                                     processed_pins.add(pin_url)
-                                    local_failed += 1
                                     shared_counts["failed"] += 1
-                                with pbar_lock:
-                                    pbar.update(1)
                                     pbar.set_postfix({"✅": shared_counts["success"], "❌": shared_counts["failed"]}, refresh=False)
+                                    pbar.update(1)
                                 break
                             time.sleep(wait_seconds)
                             continue
                         except Exception as e:
+                            local_failed += 1
                             with counters_lock:
                                 logger.log_error(f"[Worker {worker_id}] Error saving {pin_url}", e)
                                 logger.add_failed_pin(pin_url, str(e))
                                 failed_pins_dict[pin_url] = str(e)
                                 processed_pins.add(pin_url)
-                                local_failed += 1
                                 shared_counts["failed"] += 1
-                            with pbar_lock:
                                 pbar.set_postfix({"✅": shared_counts["success"], "❌": shared_counts["failed"]}, refresh=False)
+                                pbar.update(1)
                             break
-                    with pbar_lock:
-                        pbar.update(1)
                     delay = Config.RANDOM_DELAY_MIN + random.random() * (
                         Config.RANDOM_DELAY_MAX - Config.RANDOM_DELAY_MIN
                     )
