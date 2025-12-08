@@ -24,6 +24,8 @@ import json
 import random
 import argparse
 import threading
+from collections import Counter
+from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from tqdm import tqdm
@@ -55,8 +57,8 @@ def main():
     )
     parser.add_argument(
         "mode",
-        choices=["login", "copy", "profile", "retry", "multi"],
-        help="Operation mode: login, copy, profile, retry, multi (parallel boards)"
+        choices=["login", "copy", "profile", "retry", "multi", "dedup"],
+        help="Operation mode: login, copy, profile, retry, multi (parallel boards), dedup (list duplicates)"
     )
 
     args = parser.parse_args()
@@ -81,6 +83,9 @@ def main():
             logger.log_warning("⚠️  EXPERIMENTAL: Multi-board mode (parallel copying)")
             logger.log_info("This feature requires 2+ board URLs in .env")
             run_multi_board(driver_manager, logger)
+
+        elif args.mode == "dedup":
+            run_dedup(driver_manager, logger)
 
     except KeyboardInterrupt:
         logger.log_warning("Stopped by user (Ctrl+C)")
@@ -251,6 +256,93 @@ def run_retry_failed(driver_manager, logger):
     
     logger.log_info("-" * 60)
     logger.log_success(f"Retry completed: {successful_count} successful, {failed_count} failed")
+
+def run_dedup(driver_manager, logger):
+    """List duplicates on the selected board and offer cleanup instructions"""
+    logger.log_info("MODE: Duplicate Scan")
+    logger.log_info("-" * 60)
+
+    driver = driver_manager.create_driver(use_profile=False)
+    auth = PinterestAuth(driver, logger)
+    scraper = PinterestScraper(driver, logger)
+
+    # Load cookies
+    if not auth.load_cookies():
+        logger.log_error("Cookie loading failed. Run 'python main.py login' first.")
+        driver_manager.quit()
+        return
+
+    board_url = Config.TARGET_BOARD_URL or Config.SOURCE_BOARD_URL
+    if not board_url:
+        logger.log_error("Board URL is required to scan duplicates (set TARGET_BOARD_URL or SOURCE_BOARD_URL)")
+        driver_manager.quit()
+        return
+
+    logger.log_info(f"Scanning board for duplicates: {board_url}")
+    pin_links = scraper.collect_pin_links(board_url)
+
+    if not pin_links:
+        logger.log_warning("No pins found on the board")
+        driver_manager.quit()
+        return
+
+    # Group by pin id
+    def _pin_id(url):
+        try:
+            return url.split('/pin/')[1].split('/')[0]
+        except Exception:
+            return None
+
+    ids = [_pin_id(u) for u in pin_links]
+    counter = Counter(ids)
+    duplicates = [(pid, counter[pid]) for pid in counter if pid and counter[pid] > 1]
+
+    if not duplicates:
+        logger.log_success("✅ No duplicates detected on this board")
+        driver_manager.quit()
+        return
+
+    # Build report
+    dup_records = []
+    for pid, count in sorted(duplicates, key=lambda x: x[1], reverse=True):
+        urls = [u for u in pin_links if pid in u]
+        dup_records.append({
+            "pin_id": pid,
+            "count": count,
+            "extra": count - 1,
+            "example_url": urls[0],
+            "all_urls": urls,
+        })
+
+    report = {
+        "board_url": board_url,
+        "detected_at": datetime.now().isoformat(),
+        "total_pins": len(pin_links),
+        "duplicates_found": len(dup_records),
+        "items": dup_records,
+        "note": "Delete extras manually: open pin -> ... menu -> Remove from board. One occurrence should remain."
+    }
+
+    logs_dir = Path("logs")
+    logs_dir.mkdir(exist_ok=True)
+    out_file = logs_dir / f"duplicates_scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    with open(out_file, "w", encoding="utf-8") as f:
+        json.dump(report, f, indent=2, ensure_ascii=False)
+
+    logger.log_warning(f"⚠️ Duplicates detected: {len(dup_records)} unique pins with extra copies")
+    for rec in dup_records[:10]:  # show first 10 for brevity
+        logger.log_warning(f" - pin_id={rec['pin_id']} | count={rec['count']} | sample={rec['example_url']}")
+    if len(dup_records) > 10:
+        logger.log_info(f"... and {len(dup_records) - 10} more")
+
+    logger.log_info("-" * 60)
+    logger.log_info("Manual cleanup steps:")
+    logger.log_info("1) Open the duplicate pin URL")
+    logger.log_info("2) Click '...' menu -> 'Remove from board' (or 'Delete')")
+    logger.log_info("3) Leave one copy, delete extras")
+    logger.log_info(f"Report saved: {out_file}")
+
+    driver_manager.quit()
 
 def copy_board(scraper, driver_manager, logger):
     """

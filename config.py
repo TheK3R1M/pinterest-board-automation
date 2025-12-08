@@ -24,6 +24,7 @@ class Config:
     # Board settings
     SOURCE_BOARD_URL = os.getenv("SOURCE_BOARD_URL", "")
     TARGET_BOARD_NAME = os.getenv("TARGET_BOARD_NAME", "")
+    TARGET_BOARD_URL = os.getenv("TARGET_BOARD_URL", "")  # Optional: use for dedup/verification
     
     # Selenium settings
     HEADLESS_MODE = os.getenv("HEADLESS_MODE", "false").lower() == "true"
