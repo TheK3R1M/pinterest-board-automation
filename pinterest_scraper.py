@@ -38,20 +38,16 @@ class PinterestScraper:
     
     def _scroll_to_load_all(self):
         """
-        Scroll page to load all pins with smart auto-detection
+        Scroll page to load all pins with stable, incremental scrolling
         Automatically detects end of board (supports 2000+ pins)
-        No manual scroll limit - stops when no new pins load
+        Uses smooth scroll instead of jump-scroll to prevent missing pins
         """
         pin_urls = set()
-        scroll_pause_time = Config.SCROLL_PAUSE_TIME
-        no_change_threshold = 20  # INCREASED: Daha sabırlı bekle, Pinterest yavaş yükleyebilir
-        
-        # Adaptive scroll pause for large boards
-        min_scroll_pause = 0.8  # INCREASED: Daha fazla bekleme
-        max_scroll_pause = 2.5
+        no_change_threshold = 3  # REDUCED: 3 stable checks at end is enough
+        scroll_increment = 300  # pixels per scroll (smooth, not jumpy)
 
-        self.logger.log_info("Auto-scroll enabled - will detect board end automatically...")
-        self.logger.log_info(f"⏳ Patience threshold: {no_change_threshold} scrolls without new pins")
+        self.logger.log_info("Auto-scroll enabled - stable scroll method...")
+        self.logger.log_info("Board end detection: 3 consecutive no-change checks")
 
         no_change_count = 0
         scroll_count = 0
@@ -89,47 +85,19 @@ class PinterestScraper:
                 
                 # Report progress every 5 scrolls with more detail
                 if scroll_count % 5 == 0:
-                    self.logger.log_info(f"📊 Scroll {scroll_count}: {current_pin_count} pins (+{new_pins_this_scroll} new) | No change: {no_change_count}/{no_change_threshold}")
+                    self.logger.log_info(f"Scroll {scroll_count}: {current_pin_count} pins (+{new_pins_this_scroll} new) | No change: {no_change_count}/3")
 
-                # If no new pins after threshold, we've reached the end
+                # If no new pins after 3 consecutive checks, we've reached the end
                 if no_change_count >= no_change_threshold:
-                    self.logger.log_success(f"✅ Board end detected - total {current_pin_count} pins loaded")
-                    self.logger.log_info(f"ℹ️  Scrolled {scroll_count} times to reach the end")
+                    self.logger.log_success(f"Board end detected - total {current_pin_count} pins loaded")
+                    self.logger.log_info(f"Scrolled {scroll_count} times to reach the end")
                     break
 
                 last_pin_count = current_pin_count
 
-                # Adaptive scroll pause - DAHA YAVAŞ scroll = daha fazla pin yüklenir
-                if current_pin_count > 1000:
-                    adaptive_pause = 1.2  # Çok büyük tablolarda daha yavaş
-                elif current_pin_count > 500:
-                    adaptive_pause = 1.0
-                elif current_pin_count > 200:
-                    adaptive_pause = 1.5
-                else:
-                    adaptive_pause = scroll_pause_time
-
-                # Scroll down - daha agresif scroll
-                self.driver.execute_script(
-                    "window.scrollTo(0, document.body.scrollHeight);"
-                )
-                time.sleep(adaptive_pause)
-
-                # EXTRA: Biraz yukarı kaydır, sonra tekrar aşağı (Pinterest trigger için)
-                if scroll_count % 3 == 0:  # Her 3 scrollda bir
-                    self.driver.execute_script("window.scrollBy(0, -300);")
-                    time.sleep(0.3)
-                    self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                    time.sleep(0.5)
-
-                # Wait for render: attempt to detect new pins - DAHA UZUN BEKLEME
-                wait_count = 0
-                while wait_count < 10:  # 6'dan 10'a çıkardım
-                    new_pins = self.driver.find_elements(By.XPATH, "//a[contains(@href, '/pin/')]")
-                    if len(new_pins) > current_pin_count:
-                        break
-                    time.sleep(0.4)  # 0.3'ten 0.4'e
-                    wait_count += 1
+                # Smooth, incremental scroll (not jump-to-bottom)
+                self.driver.execute_script(f"window.scrollBy(0, {scroll_increment});")
+                time.sleep(0.6)  # Brief wait for Pinterest to render new pins
 
                 scroll_count += 1
                 consecutive_errors = 0  # Reset on success

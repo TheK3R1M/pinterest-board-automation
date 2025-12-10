@@ -24,11 +24,12 @@ import json
 import random
 import argparse
 import threading
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from tqdm import tqdm
+from selenium.webdriver.common.by import By
 from config import Config
 from logger import PinterestLogger
 from driver_manager import DriverManager
@@ -258,8 +259,8 @@ def run_retry_failed(driver_manager, logger):
     logger.log_success(f"Retry completed: {successful_count} successful, {failed_count} failed")
 
 def run_dedup(driver_manager, logger):
-    """List duplicates on the selected board and offer cleanup instructions"""
-    logger.log_info("MODE: Duplicate Scan")
+    """Scan board once, hash each image, find duplicates by matching hashes"""
+    logger.log_info("MODE: Duplicate Scan & Detection (by Image Hash)")
     logger.log_info("-" * 60)
 
     driver = driver_manager.create_driver(use_profile=False)
@@ -278,7 +279,7 @@ def run_dedup(driver_manager, logger):
         driver_manager.quit()
         return
 
-    logger.log_info(f"Scanning board for duplicates: {board_url}")
+    logger.log_info(f"Scanning board: {board_url}")
     pin_links = scraper.collect_pin_links(board_url)
 
     if not pin_links:
@@ -286,62 +287,117 @@ def run_dedup(driver_manager, logger):
         driver_manager.quit()
         return
 
-    # Group by pin id
-    def _pin_id(url):
+    logger.log_info(f"Fetching image hash for {len(pin_links)} pins (once per pin)...")
+    
+    # Fetch each pin ONCE and hash its image
+    import hashlib
+    import io
+    from PIL import Image
+    import requests
+    
+    pin_hashes = {}  # pin_url -> image_hash
+    failed_pins = []
+    
+    for idx, pin_url in enumerate(pin_links, 1):
+        if idx % 50 == 0:
+            logger.log_info(f"  Processed: {idx}/{len(pin_links)}...")
+        
         try:
-            return url.split('/pin/')[1].split('/')[0]
-        except Exception:
-            return None
-
-    ids = [_pin_id(u) for u in pin_links]
-    counter = Counter(ids)
-    duplicates = [(pid, counter[pid]) for pid in counter if pid and counter[pid] > 1]
-
+            driver.get(pin_url)
+            time.sleep(0.8)
+            
+            # Extract image URL from page
+            img_elements = driver.find_elements(By.XPATH, "//img[@alt]")
+            image_url = None
+            for img in img_elements:
+                src = img.get_attribute("src") or img.get_attribute("srcset")
+                if src and ("i.pinimg.com" in src or "pin" in src.lower()):
+                    image_url = src.split()[0] if " " in src else src
+                    break
+            
+            if image_url:
+                try:
+                    # Download and hash image ONCE
+                    resp = requests.get(image_url, timeout=5)
+                    if resp.status_code == 200:
+                        img = Image.open(io.BytesIO(resp.content))
+                        img.thumbnail((200, 200))  # Normalize size
+                        img_hash = hashlib.md5(img.tobytes()).hexdigest()
+                        pin_hashes[pin_url] = img_hash
+                except Exception as e:
+                    failed_pins.append(pin_url)
+            else:
+                failed_pins.append(pin_url)
+        except Exception as e:
+            failed_pins.append(pin_url)
+    
+    logger.log_success(f"Hash complete: {len(pin_hashes)} pins hashed, {len(failed_pins)} failed")
+    
+    # Group pins by their image hash (find REAL duplicates)
+    hash_to_pins = defaultdict(list)
+    for pin_url, img_hash in pin_hashes.items():
+        hash_to_pins[img_hash].append(pin_url)
+    
+    # Find groups with duplicates (same hash = same image)
+    duplicates = {h: urls for h, urls in hash_to_pins.items() if len(urls) > 1}
+    
     if not duplicates:
-        logger.log_success("✅ No duplicates detected on this board")
+        logger.log_success("No duplicate images detected (each pin has unique image)")
         driver_manager.quit()
         return
-
+    
     # Build report
+    logger.log_warning(f"Found {len(duplicates)} unique images with duplicates")
+    
     dup_records = []
-    for pid, count in sorted(duplicates, key=lambda x: x[1], reverse=True):
-        urls = [u for u in pin_links if pid in u]
+    for img_hash, urls in sorted(duplicates.items(), key=lambda x: len(x[1]), reverse=True):
         dup_records.append({
-            "pin_id": pid,
-            "count": count,
-            "extra": count - 1,
-            "example_url": urls[0],
-            "all_urls": urls,
+            "image_hash": img_hash,
+            "count": len(urls),
+            "extra_copies": len(urls) - 1,
+            "urls": urls,
+            "keep": urls[0],
+            "delete": urls[1:]
         })
-
+    
     report = {
         "board_url": board_url,
         "detected_at": datetime.now().isoformat(),
-        "total_pins": len(pin_links),
-        "duplicates_found": len(dup_records),
-        "items": dup_records,
-        "note": "Delete extras manually: open pin -> ... menu -> Remove from board. One occurrence should remain."
+        "total_pins_scanned": len(pin_links),
+        "pins_with_hash": len(pin_hashes),
+        "pins_failed": len(failed_pins),
+        "duplicate_groups": len(dup_records),
+        "total_extra_copies": sum(rec["extra_copies"] for rec in dup_records),
+        "duplicates": dup_records,
+        "note": "Same image hash = same image. Keep first URL, delete others from Pinterest manually."
     }
-
+    
     logs_dir = Path("logs")
     logs_dir.mkdir(exist_ok=True)
     out_file = logs_dir / f"duplicates_scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
     with open(out_file, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2, ensure_ascii=False)
-
-    logger.log_warning(f"⚠️ Duplicates detected: {len(dup_records)} unique pins with extra copies")
-    for rec in dup_records[:10]:  # show first 10 for brevity
-        logger.log_warning(f" - pin_id={rec['pin_id']} | count={rec['count']} | sample={rec['example_url']}")
-    if len(dup_records) > 10:
-        logger.log_info(f"... and {len(dup_records) - 10} more")
-
+    
+    # Log summary
+    total_extras = sum(rec["extra_copies"] for rec in dup_records)
+    logger.log_warning(f"Duplicate images found: {len(dup_records)} groups")
+    logger.log_warning(f"Total extra copies to remove: {total_extras}")
+    
+    for i, rec in enumerate(dup_records[:5], 1):
+        logger.log_warning(f"  Group {i}: {rec['count']} copies of same image (remove {rec['extra_copies']})")
+        logger.log_info(f"    Keep: {rec['urls'][0][:70]}")
+        logger.log_info(f"    Delete: {rec['urls'][1][:70]}")
+    
+    if len(dup_records) > 5:
+        logger.log_info(f"... and {len(dup_records) - 5} more groups")
+    
     logger.log_info("-" * 60)
-    logger.log_info("Manual cleanup steps:")
-    logger.log_info("1) Open the duplicate pin URL")
-    logger.log_info("2) Click '...' menu -> 'Remove from board' (or 'Delete')")
-    logger.log_info("3) Leave one copy, delete extras")
+    logger.log_info("To remove duplicates manually:")
+    logger.log_info("1) Open each DELETE URL from the report")
+    logger.log_info("2) Click menu (...) -> Remove from board")
+    logger.log_info("3) Keep only the KEEP URL")
     logger.log_info(f"Report saved: {out_file}")
-
+    
     driver_manager.quit()
 
 def copy_board(scraper, driver_manager, logger):

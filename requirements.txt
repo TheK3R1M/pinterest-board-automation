@@ -3,3 +3,4 @@ webdriver-manager==4.0.2
 python-dotenv==1.0.1
 requests==2.32.3
 tqdm==4.66.1
+pillow==10.1.0
