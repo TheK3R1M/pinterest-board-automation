@@ -4,3 +4,4 @@ python-dotenv==1.0.1
 requests==2.32.3
 tqdm==4.66.1
 pillow==10.1.0
+imagehash==4.3.1
